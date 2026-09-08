@@ -395,20 +395,25 @@ ok       checkpoint has 5 safetensors shards</code></pre>
     <div class="pnum">Step<b>A1</b></div>
     <div class="pbody">
       <h3>Environment and the golden run<span class="host h100">H100</span></h3>
-      <div class="meta"><span><b>2–3 hours</b></span><span>~25 GB download</span></div>
+      <div class="meta"><span><b>2–3 hours</b></span><span>login node, then one GPU</span><span>gated dataset — auth first</span></div>
+      <h4>On a login node — everything that touches the network</h4>
       <pre><code>source /mnt/DISCL/work/bthapama/alpamayo-xavier/env.sh
 alpamayo_check_paths
 
-<span class="c"># login node, first time only: reference venv + Qwen configs</span>
-bash "$ALPAMAYO_REPO/h100/setup_h100.sh"
-
-<span class="c"># the reference stack, exactly as NVIDIA pins it</span>
+bash "$ALPAMAYO_REPO/h100/setup_h100.sh"           <span class="c"># venv + Qwen configs</span>
 source "$ALPAMAYO_ROOT/alpamayo/ar1_venv/bin/activate"
 
-<span class="c"># golden tensors, fixtures, and the trace-length distribution</span>
-python "$ALPAMAYO_REPO/h100/a1_golden.py" --clips 64 --max-new-tokens 256</code></pre>
+<span class="c"># cache the driving clip -- CPU only, no model load</span>
+python "$ALPAMAYO_REPO/h100/a0_prefetch.py" --clips 64</code></pre>
+      <div class="gate"><b>The clip dataset is gated</b><code>load_physical_aiavdataset</code> streams video from <code>nvidia/PhysicalAI-Autonomous-Vehicles</code>, which is <code>gated: auto</code> and 70,775 files. Accept the terms at its dataset page and run <code>hf auth login</code> <em>before</em> <code>a0_prefetch.py</code>, or you get a 401. <code>a0</code> pulls only the frames <code>a1</code> will ask for — one clip at 64 shifted offsets, not the whole dataset — and verifies the shape is 4 cameras × 4 frames, which is what every static ONNX shape downstream derives from.</div>
+      <h4>On a compute node — the GPU work</h4>
+      <pre><code>sbatch "$ALPAMAYO_REPO/h100/a1_golden.sbatch"</code></pre>
+      <p>The template requests one GPU (22 GB bf16 fits an H100 with room to spare) and sets <code>HF_HUB_OFFLINE=1</code>, so a missing cache entry fails immediately instead of hanging on a network call the node cannot make. Set your partition and account at the top.</p>
+      <h4>On environment modules</h4>
+      <p>Two rules, if your cluster uses Lmod. <strong>Load modules first, activate the venv last</strong> — a module that prepends to <code>PATH</code> will otherwise shadow the venv's Python. And <strong>you probably do not need a CUDA module at all</strong>: torch 2.8.0 from PyPI bundles its own CUDA 12.8 runtime, cuBLAS, and cuDNN 9.10 as <code>nvidia-*-cu12</code> wheels inside the venv, and at runtime needs only the driver's <code>libcuda.so.1</code>. Loading a system CUDA 12.9 puts a different minor version of cuBLAS and cuDNN ahead of the ones torch was built against — a source of subtle breakage rather than a fix.</p>
+      <p><code>preflight.py</code> settles it empirically: it reads <code>/proc/self/maps</code> after importing torch and prints where each CUDA library was actually loaded from — the venv wheels, torch's own bundle, the driver, or a module. Run it once with the module lines and once without; if the list is unchanged, leave them commented out. It also reports GPU memory, the ONNX Runtime provider list, and which pipeline packages are importable, which turns "the job died after forty minutes" into "the job died in twenty seconds and said why".</p>
       <p>No download step: <code>a1</code> loads straight from <code>$ALPAMAYO_MODEL</code>, and <code>setup_h100.sh</code> verifies the five shards against <code>model.safetensors.index.json</code> before anything else runs — a truncated shard otherwise surfaces as an incomprehensible error two stages later.</p>
-      <p>Read <code>$ALPAMAYO_ROOT/golden/trace_stats.json</code> before anything else. It settles the largest open number in the whole project: how many reasoning tokens a typical clip actually produces. At 92.6 ms/token on a quantized Xavier, a p50 of 180 means 16.7 seconds of decode; a p50 of 40 means 3.7. Every downstream decision — how much quantization is worth, whether a student is necessary — moves with that one figure.</p>
+      <p>Then read <code>$ALPAMAYO_ROOT/golden/trace_stats.json</code> before anything else. It settles the largest open number in the whole project: how many reasoning tokens a typical clip actually produces. At 92.6 ms/token on a quantized Xavier, a p50 of 180 means 16.7 seconds of decode; a p50 of 40 means 3.7. Every downstream decision — how much quantization is worth, whether a student is necessary — moves with that one figure.</p>
       <div class="deliv"><b>Deliverable</b><code>golden/</code>: inputs, activations at layers 0/8/16/24/35, the predicted waypoints, and measured trace lengths. Plus <code>fixtures/</code> for the Xavier.</div>
     </div>
   </div>
@@ -657,7 +662,9 @@ TOTAL                         30100.1            0.033 Hz</code></pre>
     <tbody>
       <tr><td><code>env.sh</code></td><td>both</td><td>Central path config and <code>alpamayo_check_paths</code></td></tr>
       <tr><td><code>h100/arch.py</code></td><td>both</td><td>Architecture constants read out of the released checkpoint, not from prose</td></tr>
+      <tr><td><code>h100/a0_prefetch.py</code></td><td>login node</td><td>Cache the gated driving clip; CPU only, no model load</td></tr>
       <tr><td><code>h100/a1_golden.py</code></td><td>H100</td><td>Reference run, golden tensors, CoC trace statistics, Xavier fixtures</td></tr>
+      <tr><td><code>h100/a1_golden.sbatch</code></td><td>scheduler</td><td>SLURM template with <code>HF_HUB_OFFLINE=1</code></td></tr>
       <tr><td><code>h100/a2_cast_fp16.py</code></td><td>H100</td><td>bfloat16 overflow audit and cast, with a promotion manifest</td></tr>
       <tr><td><code>h100/graphs.py</code></td><td>H100</td><td>The four export wrappers; wraps real HF modules so weights are never remapped</td></tr>
       <tr><td><code>h100/a3_export_onnx.py</code></td><td>H100</td><td>Gate 1 plus ONNX export</td></tr>

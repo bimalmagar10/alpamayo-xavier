@@ -29,9 +29,77 @@ source ar1_venv/bin/activate
 uv sync --active
 
 # --- 2. export-side extras the reference repo does not need ---------------
-uv pip install --python "$(which python)" \
-    onnx==1.17.0 onnxruntime-gpu==1.20.1 onnxscript==0.1.0 \
-    nvidia-modelopt[torch]==0.23.0 polygraphy==0.49.9
+# Deliberately not version-pinned. ModelOpt already pins onnx, onnxruntime,
+# onnxscript and polygraphy per platform -- including choosing CPU onnxruntime on
+# aarch64, where no onnxruntime-gpu wheel exists. Pinning them by hand fights that
+# and breaks the resolver.
+PY_BIN="$(which python)"
+
+# Tier 1: needed by a3_export_onnx.py. Small, always resolvable.
+uv pip install --python "$PY_BIN" onnx
+
+# Tier 2: ONLY a4_quantize_int8.py needs this. A failure here must not block
+# stages a1-a3, which are most of the pipeline and produce the FP16 path.
+MODELOPT_OK=1
+if [ "$(uname -m)" = "aarch64" ]; then
+    cat <<'NOTE'
+NOTE: aarch64 detected (Grace Hopper?). ModelOpt has no onnxruntime-gpu wheel for
+      this architecture and will install CPU onnxruntime, so INT8 calibration in a4
+      will be slow. Stages a1-a3 and the whole FP16 path are unaffected.
+NOTE
+fi
+if ! uv pip install --python "$PY_BIN" "nvidia-modelopt[onnx]>=0.46"; then
+    MODELOPT_OK=0
+    cat <<'WARN'
+
+WARNING: could not install nvidia-modelopt[onnx].
+         This blocks ONLY a4 (INT8 quantization). Stages a1 (golden), a2 (fp16
+         cast) and a3 (ONNX export) do not import it, and the FP16 engines are
+         what you want working first anyway. Continuing.
+WARN
+fi
+
+# ModelOpt requires torch>=2.8 while the reference repo pins torch==2.8.0. That is
+# compatible, but `uv pip install` does not respect the project lock, so confirm
+# nothing was silently upgraded out from under flash-attn.
+python - <<'TORCHCHK'
+import sys
+import torch
+v = torch.__version__.split("+")[0]
+print("torch after extras:", torch.__version__)
+if v != "2.8.0":
+    sys.stderr.write(
+        "\nWARNING: the reference repo pins torch==2.8.0 but %s is installed.\n"
+        "         flash-attn is built against 2.8.0 -- re-run `uv sync --active`.\n" % v)
+TORCHCHK
+
+# onnxruntime-gpu falls back to CPU *silently* when it cannot load CUDA/cuDNN.
+# On a 14 GB prefill graph that turns a4 calibration from minutes into hours, and
+# nothing in the output says why -- so check the provider list now, not then.
+if [ "$MODELOPT_OK" = 1 ]; then
+python - <<'ORTCHK'
+import sys
+try:
+    import onnxruntime as ort
+except ImportError:
+    sys.exit(0)
+try:
+    ort.preload_dlls()          # >=1.21: resolves CUDA/cuDNN from the nvidia-* wheels
+except Exception:
+    pass
+provs = ort.get_available_providers()
+print("onnxruntime:", ort.__version__)
+print("  providers:", ", ".join(provs))
+if "CUDAExecutionProvider" not in provs:
+    sys.stderr.write(
+        "\nWARNING: onnxruntime has no CUDAExecutionProvider -- a4 calibration would\n"
+        "         run on CPU and take hours. Usually a cuDNN/CUDA load failure. Try:\n"
+        "           export LD_LIBRARY_PATH=$(python -c \"import nvidia,os;"
+        "print(':'.join(os.path.join(p,'lib') for p in __import__('glob').glob("
+        "os.path.dirname(nvidia.__file__)+'/*')))\"):$LD_LIBRARY_PATH\n"
+        "         Stages a1-a3 are unaffected.\n")
+ORTCHK
+fi
 
 # --- 3. the two Qwen repos the reference code resolves at load time -------
 # Alpamayo's weights are already on SHARED-SCRATCH, but base_model.py still calls
@@ -76,6 +144,7 @@ H100 environment ready.
   work / out  : $ALPAMAYO_ROOT
   reference   : $ALPAMAYO_ROOT/alpamayo (venv: ar1_venv)
   hf cache    : $HF_HOME
+  modelopt    : $([ "$MODELOPT_OK" = 1 ] && echo "installed (a4 ready)" || echo "NOT installed -- a4 blocked, a1-a3 fine")
 
 Next:
   source $ALPAMAYO_REPO/env.sh

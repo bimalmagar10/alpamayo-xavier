@@ -32,6 +32,11 @@ graphs and their external-data files run to roughly 3–4× the checkpoint. Expo
 care about. Note the shell subtlety: `export VAR=... ; source env.sh` works,
 `VAR=... source env.sh` does not persist and `alpamayo_check_paths` will say so.
 
+**Two things need the network, so do both on a login node first:** `setup_h100.sh`
+(Qwen configs) and `a0_prefetch.py` (the driving clip). The clip dataset
+`nvidia/PhysicalAI-Autonomous-Vehicles` is **gated** — accept the terms and run
+`hf auth login` before `a0_prefetch.py`, or it fails with a 401.
+
 **Cluster caveat:** run `h100/setup_h100.sh` on a login or data-transfer node the
 first time. Even though the Alpamayo weights are already local, `base_model.py`
 still calls `Qwen3VLConfig.from_pretrained("Qwen/Qwen3-VL-8B-Instruct")` and
@@ -66,7 +71,10 @@ a4  INT8 calibration -> Q/DQ in the graph        ┘                 verify.py
 | `env.sh` | both | Central path config + `alpamayo_check_paths` |
 | `h100/setup_h100.sh` | H100 | Reference venv, Qwen configs, checkpoint verification |
 | `h100/arch.py` | both | Architecture constants read from the released checkpoint |
+| `h100/a0_prefetch.py` | login node | Cache the gated driving clip before any GPU job |
 | `h100/a1_golden.py` | H100 | Golden tensors, trace-length stats, fixtures |
+| `h100/preflight.py` | H100 | Driver, torch, which CUDA libs actually loaded, package check |
+| `h100/a1_golden.sbatch` | scheduler | SLURM template for A1 |
 | `h100/a2_cast_fp16.py` | H100 | bf16→fp16 overflow audit and cast |
 | `h100/graphs.py` | H100 | The four export wrappers |
 | `h100/a3_export_onnx.py` | H100 | Verify against reference, then export |
@@ -84,7 +92,12 @@ source /mnt/DISCL/work/bthapama/alpamayo-xavier/env.sh
 bash "$ALPAMAYO_REPO/h100/setup_h100.sh"              # login node, first time only
 source "$ALPAMAYO_ROOT/alpamayo/ar1_venv/bin/activate"
 
-python "$ALPAMAYO_REPO/h100/a1_golden.py"  --clips 64
+python "$ALPAMAYO_REPO/h100/a0_prefetch.py" --clips 64   # login node, CPU, needs network
+sbatch "$ALPAMAYO_REPO/h100/a1_golden.sbatch"           # compute node, 1 GPU
+
+# on a compute node, module order is: module load ... FIRST, venv activate LAST.
+# A CUDA module is usually unnecessary -- torch bundles its own CUDA 12.8.
+# preflight.py shows which libraries actually got loaded, so you can check.
 python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py" --audit-only
 python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py"
 python "$ALPAMAYO_REPO/h100/a3_export_onnx.py"
