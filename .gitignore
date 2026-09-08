@@ -1,0 +1,20 @@
+# Derived artefacts live in $ALPAMAYO_ROOT on scratch, never in the repo.
+# These entries are a safety net for when someone points ALPAMAYO_ROOT here.
+golden/
+onnx/
+fixtures/
+engines/
+ckpt/
+results/
+logs/
+*.onnx
+*.onnx.data
+*.plan
+*.npz
+*.npy
+*.safetensors
+
+__pycache__/
+*.pyc
+.venv/
+ar1_venv/

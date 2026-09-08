@@ -1,0 +1,837 @@
+<title>Alpamayo on Xavier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+:root{
+  --ground:#EBEEF0; --surface:#FFFFFF; --sunken:#E1E6E9;
+  --ink:#101619; --ink-2:#39474F; --muted:#5E6D77; --line:#CBD3D8; --line-2:#DDE3E7;
+  --signal:#A54C00; --signal-soft:#F4E4D2;
+  --probe:#0A6060; --fault:#93261C; --ok:#2C6B3F;
+  --seg-vision:#0A6060; --seg-prefill:#2B5580; --seg-decode:#A54C00; --seg-expert:#63558A;
+  --shadow:0 1px 2px rgba(16,22,25,.06), 0 8px 24px -12px rgba(16,22,25,.18);
+  --display:"Archivo",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0D1216; --surface:#151C21; --sunken:#101619;
+    --ink:#E3E9EC; --ink-2:#B8C4CB; --muted:#85939D; --line:#2A353C; --line-2:#212A30;
+    --signal:#F0A04C; --signal-soft:#2E2011;
+    --probe:#48B8AF; --fault:#EB786B; --ok:#6FBF87;
+    --seg-vision:#3FA8A0; --seg-prefill:#6C9FD4; --seg-decode:#F0A04C; --seg-expert:#A497CA;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0D1216; --surface:#151C21; --sunken:#101619;
+  --ink:#E3E9EC; --ink-2:#B8C4CB; --muted:#85939D; --line:#2A353C; --line-2:#212A30;
+  --signal:#F0A04C; --signal-soft:#2E2011;
+  --probe:#48B8AF; --fault:#EB786B; --ok:#6FBF87;
+  --seg-vision:#3FA8A0; --seg-prefill:#6C9FD4; --seg-decode:#F0A04C; --seg-expert:#A497CA;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:var(--body); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased; margin:0;
+}
+.page{max-width:1240px;margin:0 auto;padding:0 28px 96px}
+.col{max-width:660px}
+.wide{max-width:940px}
+
+/* ---------- masthead ---------- */
+header.mast{padding:56px 0 34px;border-bottom:2px solid var(--ink)}
+.eyebrow{
+  font-family:var(--mono); font-size:11.5px; font-weight:500;
+  letter-spacing:.13em; text-transform:uppercase; color:var(--signal);
+  display:flex; flex-wrap:wrap; gap:6px 14px; margin-bottom:22px;
+}
+.eyebrow span:not(:last-child)::after{content:" ·";color:var(--muted);margin-left:14px}
+h1{
+  font-family:var(--display); font-weight:700; font-size:clamp(38px,6.4vw,66px);
+  line-height:1.02; letter-spacing:-.028em; margin:0 0 18px; text-wrap:balance;
+}
+.standfirst{font-size:20px;line-height:1.5;color:var(--ink-2);max-width:640px;margin:0}
+
+.specstrip{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(158px,1fr));
+  gap:0; border:1px solid var(--line); border-radius:3px; overflow:hidden;
+  margin:32px 0 0; background:var(--surface);
+}
+.specstrip div{padding:13px 16px;border-right:1px solid var(--line-2)}
+.specstrip div:last-child{border-right:none}
+.specstrip dt{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 5px
+}
+.specstrip dd{font-family:var(--mono);font-size:14px;font-weight:500;margin:0;color:var(--ink)}
+
+/* ---------- structure ---------- */
+main{display:block}
+section{padding-top:58px}
+.sechead{display:flex;gap:16px;align-items:baseline;margin-bottom:8px}
+.secnum{
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--signal);
+  letter-spacing:.06em;padding-top:6px;flex:none;
+}
+h2{
+  font-family:var(--display);font-weight:600;font-size:clamp(25px,3.3vw,33px);
+  letter-spacing:-.018em;line-height:1.15;margin:0;text-wrap:balance;
+}
+h3{
+  font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.008em;
+  margin:38px 0 10px;text-wrap:balance;
+}
+h4{
+  font-family:var(--mono);font-weight:600;font-size:12px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);margin:26px 0 8px;
+}
+p{margin:0 0 15px}
+a{color:var(--signal);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--signal);outline-offset:3px;border-radius:2px}
+ul,ol{margin:0 0 15px;padding-left:21px}
+li{margin-bottom:7px}
+li::marker{color:var(--muted)}
+strong{font-weight:600}
+code{
+  font-family:var(--mono);font-size:.855em;background:var(--sunken);
+  padding:1px 5px;border-radius:3px;color:var(--ink);border:1px solid var(--line-2);
+}
+.lede{font-size:18.5px;color:var(--ink-2);margin-bottom:22px}
+hr.rule{border:none;border-top:1px solid var(--line);margin:52px 0 0}
+
+/* ---------- verdict ---------- */
+.verdict{
+  background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--signal);
+  border-radius:3px;padding:26px 28px;box-shadow:var(--shadow);margin:6px 0 0;
+}
+.verdict p:last-child{margin-bottom:0}
+.vline{
+  font-family:var(--display);font-size:21px;font-weight:600;line-height:1.32;
+  letter-spacing:-.012em;margin:0 0 14px;
+}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;margin:18px 0 6px;border:1px solid var(--line);border-radius:3px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:13px;min-width:520px}
+th{
+  text-align:left;font-weight:600;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+td{padding:9px 14px;border-bottom:1px solid var(--line-2);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.total td{border-top:1px solid var(--line);font-weight:600;background:var(--sunken)}
+caption{
+  caption-side:bottom;text-align:left;font-family:var(--body);font-size:13.5px;
+  color:var(--muted);padding:11px 14px;line-height:1.5;
+}
+.fault{color:var(--fault);font-weight:500}
+.ok{color:var(--ok);font-weight:500}
+
+/* ---------- code ---------- */
+pre{
+  background:var(--sunken);border:1px solid var(--line);border-radius:3px;
+  padding:15px 17px;overflow-x:auto;margin:14px 0;
+  font-family:var(--mono);font-size:12.5px;line-height:1.62;color:var(--ink);
+}
+pre code{background:none;padding:0;border:none;font-size:inherit}
+pre .c{color:var(--muted)}
+pre .k{color:var(--signal)}
+.filename{
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--muted);
+  margin:18px 0 -6px;text-transform:none;
+}
+
+/* ---------- blockers ---------- */
+.blockers{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:3px;overflow:hidden;background:var(--surface);margin:20px 0}
+.blocker{display:grid;grid-template-columns:58px 1fr;border-bottom:1px solid var(--line-2)}
+.blocker:last-child{border-bottom:none}
+.bid{
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--fault);
+  padding:16px 0 16px 16px;letter-spacing:.04em;
+}
+.bbody{padding:16px 18px 16px 0}
+.btitle{font-family:var(--display);font-weight:600;font-size:16px;margin:0 0 5px;letter-spacing:-.006em}
+.bbody p{font-size:15px;line-height:1.55;margin:0;color:var(--ink-2)}
+.bbody p+p{margin-top:8px}
+
+/* ---------- phases ---------- */
+.phase{
+  border-top:1px solid var(--line);padding-top:26px;margin-top:34px;
+  display:grid;grid-template-columns:82px 1fr;gap:0 22px;
+}
+.pnum{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--signal);padding-top:5px}
+.pnum b{display:block;font-family:var(--display);font-size:34px;font-weight:700;letter-spacing:-.03em;color:var(--ink);line-height:1;margin-top:4px}
+.pbody{min-width:0}
+.pbody h3{margin-top:0}
+.meta{
+  font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:5px 16px;margin:0 0 14px;
+}
+.meta b{color:var(--ink-2);font-weight:500}
+.deliv{
+  border-left:3px solid var(--probe);background:var(--surface);
+  padding:12px 16px;margin:16px 0 0;font-size:15px;line-height:1.55;
+}
+.deliv b{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--probe);display:block;margin-bottom:4px;font-weight:600}
+
+/* ---------- charts ---------- */
+figure{margin:26px 0 0}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:20px 18px;overflow-x:auto}
+.chart svg{display:block;min-width:660px;width:100%;height:auto}
+figcaption{font-size:13.5px;color:var(--muted);line-height:1.55;margin-top:11px;max-width:660px}
+svg text{font-family:"IBM Plex Mono",monospace}
+
+/* ---------- misc ---------- */
+details{border:1px solid var(--line);border-radius:3px;background:var(--surface);margin:16px 0;overflow:hidden}
+summary{
+  cursor:pointer;padding:13px 17px;font-family:var(--mono);font-size:12.5px;font-weight:500;
+  letter-spacing:.02em;color:var(--ink);list-style:none;
+}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸ ";color:var(--signal)}
+details[open] summary::before{content:"▾ "}
+details[open] summary{border-bottom:1px solid var(--line-2)}
+.dbody{padding:4px 17px 16px}
+.dbody pre{margin-top:12px}
+.dbody p{font-size:15px}
+
+.srcs{font-family:var(--mono);font-size:12.5px;line-height:1.75;columns:2;column-gap:40px}
+.srcs a{display:block;break-inside:avoid;margin-bottom:8px;color:var(--ink-2);text-decoration:none;border-bottom:1px solid var(--line)}
+.srcs a:hover{color:var(--signal);border-color:var(--signal)}
+
+footer{margin-top:64px;padding-top:22px;border-top:2px solid var(--ink);font-family:var(--mono);font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 24px}
+
+@media (max-width:720px){
+  body{font-size:16px}
+  .page{padding:0 18px 64px}
+  .phase{grid-template-columns:1fr;gap:0}
+  .pnum{padding-bottom:10px}
+  .pnum b{display:inline;font-size:22px;margin-left:8px}
+  .blocker{grid-template-columns:44px 1fr}
+  .bid{padding-left:12px}
+  .srcs{columns:1}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="page">
+
+<header class="mast">
+  <div class="eyebrow">
+    <span>Feasibility study</span><span>JetPack 5.1.7 / L4T r35.6.5</span><span>sm_72</span><span>2026-09-07</span>
+  </div>
+  <h1>Alpamayo on Xavier</h1>
+  <p class="standfirst">What it takes to run NVIDIA's 10&nbsp;billion-parameter driving VLA on a Jetson AGX Xavier that tops out at CUDA&nbsp;11.4 — and a staged plan that produces a defensible latency number at every step, whether or not the last step lands.</p>
+  <dl class="specstrip">
+    <div><dt>Device</dt><dd>AGX Xavier 32&nbsp;GB</dd></div>
+    <div><dt>GPU</dt><dd>512-core Volta</dd></div>
+    <div><dt>Bandwidth</dt><dd>136.5 GB/s</dd></div>
+    <div><dt>FP16 peak</dt><dd>11.3 TFLOP/s</dd></div>
+    <div><dt>Model</dt><dd>11.08 B / 22.2 GB</dd></div>
+    <div><dt>Target</dt><dd>99 ms on-vehicle</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<section id="verdict">
+  <div class="sechead"><div class="secnum">01</div><h2>The short answer</h2></div>
+  <div class="col">
+  <p class="lede">You asked whether to quantize, distil, or do something else. The honest answer is that those are answers to two different questions, and you need both — but not in the order most people try them.</p>
+  </div>
+
+  <div class="verdict wide">
+    <p class="vline">Quantize to get the model to <em>run</em>. Distil to get it to run <em>fast</em>. The single biggest lever is neither: it is deleting the autoregressive reasoning trace from the runtime path.</p>
+    <p>On Xavier, generating one token of chain-of-causation reasoning costs about <strong>185 ms in FP16</strong>, because every token drags all 15.2 GB of backbone weights across a 136.5 GB/s bus. A 300-token trace is therefore ~56 seconds — <strong>90% of total inference time</strong> — before the trajectory decoder has done anything at all. Weight quantization halves or quarters that term. Removing the trace removes it entirely.</p>
+  </div>
+
+  <div class="col">
+  <h3>Concretely, what I would do</h3>
+  <ol>
+    <li><strong>Do not try to run the reference repository.</strong> It needs Python 3.12, PyTorch 2.8, bfloat16 and FlashAttention-2. Xavier can supply none of the four, and no upgrade path exists — <a href="#blockers">§3</a>.</li>
+    <li><strong>Measure the hardware first, then the shapes, then the weights.</strong> A shape-faithful surrogate with random weights gives you the <em>real</em> per-stage Xavier latency in a day, with no 22 GB download and no port — because Alpamayo-1 is fully dense, so latency depends only on shapes and dtype. That is <a href="#plan">Phase 2</a>, and it is the result you can publish even if everything after it stalls.</li>
+    <li><strong>Then port the real weights in FP16</strong> and validate numerics against an H100 golden run. This is the fidelity result.</li>
+    <li><strong>Quantize to INT8 via TensorRT 8.5.2</strong>, per subgraph. Not FP8, not NVFP4 — Volta has neither, which means NVIDIA's own published Alpamayo quantization recipe does not apply to your board.</li>
+    <li><strong>Distil a 0.4–1.5 B student on the H100</strong> with a compressed visual token budget and no runtime reasoning. This is the only configuration that reaches interactive rates on Xavier, and it is the architecture NVIDIA themselves describe for production AV compute.</li>
+  </ol>
+  <p>Steps 1–3 are about two weeks. Step 4 is another two. Step 5 is the research contribution and is measured in months.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="model">
+  <div class="sechead"><div class="secnum">02</div><h2>What the model actually is</h2></div>
+  <div class="col">
+  <p class="lede">Published descriptions round Alpamayo-1 to "8.2 B backbone plus 2.3 B action expert." That is too coarse to plan against. The numbers below come from reading the safetensors headers and <code>config.json</code> of <code>nvidia/Alpamayo-R1-10B</code> directly, so every shape here is the shipped one.</p>
+  <p>Two things in that table change the engineering problem. First, <code>vlm_backend</code> is <code>qwenvl3</code> — 36 layers at width 4096 with per-head QK-norm, i.e. <strong>Qwen3-VL-8B topology</strong>, not the Qwen2.5-VL-7B that the Cosmos-Reason lineage implies. Second, the action expert has 36 layers with <em>exactly the backbone's KV geometry</em> (8 heads × 128). That is not a coincidence: it is a π₀-style action expert that attends over the concatenated <code>[backbone KV ; expert KV]</code> at every layer, which means the backbone's KV cache must stay resident while the flow-matching loop runs.</p>
+  </div>
+
+  <div class="tw wide">
+  <table>
+    <caption>Read from the 5 safetensors shards' headers via HTTP range requests; 1,166 tensors, 1,162 of them BF16. Totals match <code>model.safetensors.index.json</code> exactly (11,078,526,194 params / 22,157,052,464 bytes).</caption>
+    <thead><tr>
+      <th>Component</th><th>Topology</th><th class="n">Params</th><th class="n">BF16</th><th class="n">INT8</th><th class="n">W4</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Vision encoder</td><td>27 blocks · d 1152 · MLP 4304 · patch (2,16,16) · 3 DeepStack mergers</td><td class="n">576.4 M</td><td class="n">1.15 GB</td><td class="n">0.58</td><td class="n">0.32</td></tr>
+      <tr><td>LLM backbone</td><td>36 layers · d 4096 · 32 q × 128 · 8 kv × 128 · MLP 12288 SwiGLU · QK-norm</td><td class="n">6,945.8 M</td><td class="n">13.89 GB</td><td class="n">6.95</td><td class="n">3.91</td></tr>
+      <tr><td>Embedding</td><td>155,697 × 4096, untied</td><td class="n">637.7 M</td><td class="n">1.28 GB</td><td class="n">0.64</td><td class="n">0.36</td></tr>
+      <tr><td>LM head</td><td>155,697 × 4096 (4,000 of them trajectory bins)</td><td class="n">637.7 M</td><td class="n">1.28 GB</td><td class="n">0.64</td><td class="n">0.36</td></tr>
+      <tr><td>Action expert</td><td>36 layers · d 2048 · 16 q × 128 · 8 kv × 128 · MLP 8256 · non-causal</td><td class="n">2,279.1 M</td><td class="n">4.56 GB</td><td class="n">2.28</td><td class="n">1.28</td></tr>
+      <tr class="total"><td>Total</td><td>flow-matching decoder, Euler, dt = 0.1 → 10 steps</td><td class="n">11,078.5 M</td><td class="n">22.16 GB</td><td class="n">11.08</td><td class="n">6.23</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <h3>The workload per inference</h3>
+  <p>4 cameras (front-wide, front-tele, cross-left, cross-right) × 4 frames at 10 Hz, downsampled to 320×576. With a 16×16 spatial patch and temporal patch 2, that is <strong>720 patches per frame-slot × 2 slots × 4 cameras = 5,760 ViT tokens</strong>, which the 2×2 merger reduces to <strong>1,440 visual tokens</strong> entering the LLM. Add 48 history-trajectory tokens and a short text command and the prefill is about <strong>1,550 tokens</strong>.</p>
+  <p>The model then autoregressively emits a chain-of-causation trace followed by <strong>128 discrete trajectory tokens</strong> (64 waypoints × quantized acceleration and curvature), and the expert integrates those into 64 continuous waypoints over a 6.4-second horizon.</p>
+  <p>The backbone KV cache is small — 36 × 8 × 128 × 2 × 2 bytes = <strong>144 KiB per token</strong>, so 229 MB at 1,550 tokens. Memory pressure on Xavier comes from weights, not cache.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="blockers">
+  <div class="sechead"><div class="secnum">03</div><h2>Five blockers, none of them fixable</h2></div>
+  <div class="col">
+  <p class="lede">Your instinct to check dependency compatibility first was right, and the answer is worse than "some pinning work." The reference implementation cannot be made to run on JetPack 5 at all. Each of these is independently fatal.</p>
+  </div>
+
+  <div class="blockers wide">
+    <div class="blocker">
+      <div class="bid">B1</div>
+      <div class="bbody">
+        <p class="btitle">Xavier is frozen at CUDA 11.4, permanently</p>
+        <p>JetPack 6 supports Orin only; AGX Xavier tops out at JetPack 5.1.x / L4T r35.x, which pins CUDA 11.4, cuDNN 8.6 and TensorRT 8.5.2. NVIDIA's newest PyTorch wheel for that index is <code>torch-2.1.0a0+41361538.nv23.06-cp38</code> — I checked the redistributable index directly, and 2.1.0 is the ceiling. The repo wants <code>torch==2.8.0</code>, which requires CUDA ≥ 12. There is no bridge.</p>
+      </div>
+    </div>
+    <div class="blocker">
+      <div class="bid">B2</div>
+      <div class="bbody">
+        <p class="btitle">The weights are bfloat16; Volta has no bfloat16</p>
+        <p><code>config.json</code> declares <code>"dtype": "bfloat16"</code> and 1,162 of 1,166 tensors are BF16. Hardware bf16 arithmetic starts at sm_80. On sm_72 you can hold bf16 tensors but cuBLAS will not issue a bf16 GEMM. <strong>Every weight must be cast to FP16</strong>, which narrows exponent range from bf16's ~1e38 to 65,504 — so the conversion needs a per-tensor overflow audit, not a blind <code>.half()</code>.</p>
+      </div>
+    </div>
+    <div class="blocker">
+      <div class="bid">B3</div>
+      <div class="bbody">
+        <p class="btitle">FlashAttention-2 does not build for sm_72</p>
+        <p><code>pyproject.toml</code> pins <code>flash-attn&gt;=2.8.3</code> and <code>config.json</code> sets <code>attn_implementation: "flash_attention_2"</code>. FA2 requires Ampere or newer. Replace with <code>scaled_dot_product_attention</code> on the memory-efficient backend — which also means you must expand GQA KV heads by hand, since torch 2.1 has no <code>enable_gqa</code>.</p>
+      </div>
+    </div>
+    <div class="blocker">
+      <div class="bid">B4</div>
+      <div class="bbody">
+        <p class="btitle">Python 3.12 vs. the 3.8 the wheel is built for</p>
+        <p>The repo pins <code>requires-python = "==3.12.*"</code>; <code>transformers==4.57.1</code> needs ≥ 3.9. The only CUDA-enabled Jetson PyTorch for JetPack 5 is <code>cp38</code>. Building a newer Python does not help, because there is no matching torch wheel for it and torch ≥ 2.5 will not compile against CUDA 11.4 anyway.</p>
+      </div>
+    </div>
+    <div class="blocker">
+      <div class="bid">B5</div>
+      <div class="bbody">
+        <p class="btitle">NVIDIA's own Alpamayo deployment path excludes your board</p>
+        <p>TensorRT-Edge-LLM lists Alpamayo among supported models, but targets Jetson Thor (SM 101), Orin (SM 87), DRIVE GB10 and DGX Spark. Xavier is not on the list. The published quantization recipe (<code>alpamayo1_5_quant</code>, Model Optimizer) produces <strong>FP8 and NVFP4</strong> — Hopper and Blackwell formats. Volta supports FP16 and INT8 and nothing newer. You will be writing the Xavier path yourself; that is precisely what makes the measurement worth publishing.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+  <p><strong>The consequence, stated plainly:</strong> there is no configuration in which you <code>pip install</code> your way to Alpamayo on this board. Everything below assumes you re-implement the forward pass against torch 2.1 / cp38 and load the released weights into it. That is roughly 1,500 lines and it is very tractable, because the topology is a well-documented Qwen3-VL decoder plus a π₀-style expert — but it is the actual work item, and pretending otherwise would waste your first month.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="roofline">
+  <div class="sechead"><div class="secnum">04</div><h2>The Xavier roofline</h2></div>
+  <div class="col">
+  <p class="lede">Before predicting anything, it is worth being precise about which of the two ceilings binds at each stage — because they call for opposite optimizations.</p>
+  <p>Xavier's Volta GPU offers <strong>11.3 TFLOP/s FP16</strong> (64 tensor cores at 1.377 GHz) and <strong>22.6 TOP/s INT8</strong>, against <strong>136.5 GB/s</strong> of shared LPDDR4x. The ratio — roughly 83 FLOP per byte — means anything processing many tokens at once is compute-bound, and anything processing one token at a time is bandwidth-bound. Alpamayo does both, in sequence.</p>
+  </div>
+
+  <div class="tw wide">
+  <table>
+    <caption>Modelled at 45% MFU for large FP16 GEMMs and 60% MBU for streaming reads — conservative but realistic figures for a Volta iGPU under a 30 W envelope. <strong>Phase 1 of the plan replaces both constants with measured ones</strong>; treat these as the prior, not the result.</caption>
+    <thead><tr><th>Stage</th><th>Bound by</th><th class="n">Work</th><th class="n">FP16</th><th class="n">INT8</th><th>What actually reduces it</th></tr></thead>
+    <tbody>
+      <tr><td>Vision encoder</td><td>Compute</td><td class="n">7.2 TFLOP</td><td class="n">1,406 ms</td><td class="n">703 ms</td><td>Fewer cameras / frames / pixels</td></tr>
+      <tr><td>LLM prefill</td><td>Compute</td><td class="n">23.0 TFLOP</td><td class="n">4,513 ms</td><td class="n">2,257 ms</td><td>Visual token compression</td></tr>
+      <tr><td>LLM decode</td><td class="fault">Bandwidth</td><td class="n">15.2 GB / tok</td><td class="n">185 ms / tok</td><td class="n">93 ms / tok</td><td class="fault">Generating fewer tokens</td></tr>
+      <tr><td>Action expert</td><td>Bandwidth</td><td class="n">47.9 GB</td><td class="n">584 ms</td><td class="n">306 ms</td><td>Fewer flow steps; CUDA graph</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <p>Read the decode row twice. At <strong>5.4 tokens per second in FP16</strong>, the reasoning trace is not a feature that costs a little extra — it is the entire latency budget, several times over. And it is the one term that quantization attacks most effectively and architecture attacks completely.</p>
+  <p>The expert is bandwidth-bound for a non-obvious reason: 64 waypoint tokens is far too short a sequence to saturate the tensor cores, so all 10 Euler steps are dominated by re-reading 4.56 GB of expert weights. This is also why <code>enable_diffusion_expert_cuda_graph()</code> exists in the reference code — 36 layers × 10 steps is 360 launches of small kernels, and Xavier's Carmel cores are slow at launch. <strong>Use the CUDA graph path; on Xavier it matters more than it does on an H100.</strong></p>
+  </div>
+</section>
+
+<hr class="rule">
+<section id="predicted">
+  <div class="sechead"><div class="secnum">05</div><h2>Where the milliseconds go</h2></div>
+  <div class="col">
+  <p class="lede">Nine configurations, from the model exactly as NVIDIA ships it down to a distilled student, with the same roofline applied to all of them. These are <strong>modelled</strong> numbers — the whole point of the plan in §7 is to replace them with measured ones — but the <em>shape</em> of the picture is what matters and that shape is robust to the constants.</p>
+  </div>
+
+  <figure class="wide">
+    <div class="chart"><svg viewBox="0 0 920 478" role="img" aria-label="Latency composition by configuration">
+  <title>Where the milliseconds go, by configuration</title>
+  <rect x="300" y="14" width="11" height="11" rx="1.5" fill="var(--seg-vision)"/>
+  <text x="316" y="24" font-size="11" fill="var(--muted)">vision</text>
+  <rect x="376" y="14" width="11" height="11" rx="1.5" fill="var(--seg-prefill)"/>
+  <text x="392" y="24" font-size="11" fill="var(--muted)">prefill</text>
+  <rect x="452" y="14" width="11" height="11" rx="1.5" fill="var(--seg-decode)"/>
+  <text x="468" y="24" font-size="11" fill="var(--muted)">decode</text>
+  <rect x="528" y="14" width="11" height="11" rx="1.5" fill="var(--seg-expert)"/>
+  <text x="544" y="24" font-size="11" fill="var(--muted)">expert</text>
+  <text x="815" y="24" font-size="10" letter-spacing=".08em" fill="var(--muted)">TOTAL</text>
+  <text x="0" y="62" font-size="12.5" font-weight="500" fill="var(--ink)">A<tspan dx="10">10B FP16, full CoC</tspan></text>
+  <text x="0" y="77" font-size="10.5" fill="var(--muted)">as released · 300 generated tokens</text>
+    <rect x="300.0" y="52" width="11.3" height="20" fill="var(--seg-vision)"><title>vision: 1,406 ms</title></rect>
+    <rect x="311.3" y="52" width="36.4" height="20" fill="var(--seg-prefill)"><title>prefill: 4,513 ms</title></rect>
+    <rect x="347.7" y="52" width="447.6" height="20" fill="var(--seg-decode)"><title>decode: 55,557 ms</title></rect>
+    <rect x="795.3" y="52" width="4.7" height="20" fill="var(--seg-expert)"><title>expert: 584 ms</title></rect>
+  <text x="815" y="65" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">62 060<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="78" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">0.016 Hz</text>
+  <text x="0" y="108" font-size="12.5" font-weight="500" fill="var(--ink)">B<tspan dx="10">10B INT8, full CoC</tspan></text>
+  <text x="0" y="123" font-size="10.5" fill="var(--muted)">weight-only W8</text>
+    <rect x="300.0" y="98" width="20.7" height="20" fill="var(--seg-vision)"><title>vision: 1,406 ms</title></rect>
+    <rect x="320.7" y="98" width="66.4" height="20" fill="var(--seg-prefill)"><title>prefill: 4,513 ms</title></rect>
+    <rect x="387.0" y="98" width="408.5" height="20" fill="var(--seg-decode)"><title>decode: 27,778 ms</title></rect>
+    <rect x="795.5" y="98" width="4.5" height="20" fill="var(--seg-expert)"><title>expert: 306 ms</title></rect>
+  <text x="815" y="111" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">34 004<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="124" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">0.029 Hz</text>
+  <text x="0" y="154" font-size="12.5" font-weight="500" fill="var(--ink)">C<tspan dx="10">10B INT8, no CoC</tspan></text>
+  <text x="0" y="169" font-size="10.5" fill="var(--muted)">128 trajectory tokens only</text>
+    <rect x="300.0" y="144" width="38.9" height="20" fill="var(--seg-vision)"><title>vision: 1,406 ms</title></rect>
+    <rect x="338.9" y="144" width="124.8" height="20" fill="var(--seg-prefill)"><title>prefill: 4,513 ms</title></rect>
+    <rect x="463.7" y="144" width="327.8" height="20" fill="var(--seg-decode)"><title>decode: 11,852 ms</title></rect>
+    <rect x="791.5" y="144" width="8.5" height="20" fill="var(--seg-expert)"><title>expert: 306 ms</title></rect>
+  <text x="815" y="157" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">18 078<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="170" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">0.055 Hz</text>
+  <text x="0" y="200" font-size="12.5" font-weight="500" fill="var(--ink)">D<tspan dx="10">10B W4 + 4x token cut</tspan></text>
+  <text x="0" y="215" font-size="10.5" fill="var(--muted)">360 visual tokens · 128 traj</text>
+    <rect x="300.0" y="190" width="20.0" height="20" fill="var(--seg-vision)"><title>vision: 339 ms</title></rect>
+    <rect x="320.0" y="190" width="77.2" height="20" fill="var(--seg-prefill)"><title>prefill: 1,310 ms</title></rect>
+    <rect x="397.2" y="190" width="393.1" height="20" fill="var(--seg-decode)"><title>decode: 6,667 ms</title></rect>
+    <rect x="790.3" y="190" width="9.7" height="20" fill="var(--seg-expert)"><title>expert: 165 ms</title></rect>
+  <text x="815" y="203" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">8 480<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="216" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">0.118 Hz</text>
+  <text x="0" y="246" font-size="12.5" font-weight="500" fill="var(--ink)">E<tspan dx="10">10B W4, expert-only</tspan></text>
+  <text x="0" y="261" font-size="10.5" fill="var(--muted)">no autoregressive decode at all</text>
+    <rect x="300.0" y="236" width="90.8" height="20" fill="var(--seg-vision)"><title>vision: 339 ms</title></rect>
+    <rect x="390.8" y="236" width="351.0" height="20" fill="var(--seg-prefill)"><title>prefill: 1,310 ms</title></rect>
+    <rect x="741.9" y="236" width="13.9" height="20" fill="var(--seg-decode)"><title>decode: 52 ms</title></rect>
+    <rect x="755.8" y="236" width="44.2" height="20" fill="var(--seg-expert)"><title>expert: 165 ms</title></rect>
+  <text x="815" y="249" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">1 866<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="262" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">0.536 Hz</text>
+  <text x="0" y="292" font-size="12.5" font-weight="500" fill="var(--ink)">F<tspan dx="10">Student 1.5B FP16</tspan></text>
+  <text x="0" y="307" font-size="10.5" fill="var(--muted)">distilled · no CoC at runtime</text>
+    <rect x="300.0" y="282" width="101.6" height="20" fill="var(--seg-vision)"><title>vision: 115 ms</title></rect>
+    <rect x="401.6" y="282" width="235.9" height="20" fill="var(--seg-prefill)"><title>prefill: 267 ms</title></rect>
+    <rect x="637.5" y="282" width="30.9" height="20" fill="var(--seg-decode)"><title>decode: 35 ms</title></rect>
+    <rect x="668.4" y="282" width="132.5" height="20" fill="var(--seg-expert)"><title>expert: 150 ms</title></rect>
+  <text x="815" y="295" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">566<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="308" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">1.77 Hz</text>
+  <text x="0" y="338" font-size="12.5" font-weight="500" fill="var(--ink)">G<tspan dx="10">Student 1.5B INT8</tspan></text>
+  <text x="0" y="353" font-size="10.5" fill="var(--muted)">distilled + W8</text>
+    <rect x="300.0" y="328" width="120.8" height="20" fill="var(--seg-vision)"><title>vision: 115 ms</title></rect>
+    <rect x="420.8" y="328" width="280.5" height="20" fill="var(--seg-prefill)"><title>prefill: 267 ms</title></rect>
+    <rect x="701.3" y="328" width="17.9" height="20" fill="var(--seg-decode)"><title>decode: 17 ms</title></rect>
+    <rect x="719.1" y="328" width="80.9" height="20" fill="var(--seg-expert)"><title>expert: 77 ms</title></rect>
+  <text x="815" y="341" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">476<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="354" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">2.1 Hz</text>
+  <text x="0" y="384" font-size="12.5" font-weight="500" fill="var(--ink)">H<tspan dx="10">Student 0.4B INT8</tspan></text>
+  <text x="0" y="399" font-size="10.5" fill="var(--muted)">288 visual tokens · 8 flow steps</text>
+    <rect x="300.0" y="374" width="185.6" height="20" fill="var(--seg-vision)"><title>vision: 49 ms</title></rect>
+    <rect x="485.6" y="374" width="185.6" height="20" fill="var(--seg-prefill)"><title>prefill: 49 ms</title></rect>
+    <rect x="671.2" y="374" width="15.2" height="20" fill="var(--seg-decode)"><title>decode: 4 ms</title></rect>
+    <rect x="686.4" y="374" width="113.6" height="20" fill="var(--seg-expert)"><title>expert: 30 ms</title></rect>
+  <text x="815" y="387" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">132<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="400" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">7.59 Hz</text>
+  <text x="0" y="430" font-size="12.5" font-weight="500" fill="var(--ink)">I<tspan dx="10">Student 0.4B INT8 + flex</tspan></text>
+  <text x="0" y="445" font-size="10.5" fill="var(--muted)">96 visual tokens · 20x compression</text>
+    <rect x="300.0" y="420" width="95.9" height="20" fill="var(--seg-vision)"><title>vision: 14 ms</title></rect>
+    <rect x="395.9" y="420" width="164.4" height="20" fill="var(--seg-prefill)"><title>prefill: 24 ms</title></rect>
+    <rect x="560.3" y="420" width="27.4" height="20" fill="var(--seg-decode)"><title>decode: 4 ms</title></rect>
+    <rect x="587.7" y="420" width="205.5" height="20" fill="var(--seg-expert)"><title>expert: 30 ms</title></rect>
+  <text x="815" y="433" font-size="13" font-weight="600" fill="var(--ink)" style="font-variant-numeric:tabular-nums">73<tspan font-size="10" font-weight="400" fill="var(--muted)" dx="3">ms</tspan></text>
+  <text x="815" y="446" font-size="10" fill="var(--muted)" style="font-variant-numeric:tabular-nums">13.78 Hz</text>
+</svg></div>
+    <figcaption>Each bar is normalized to its own total, so what you are reading is <em>composition</em>, not scale. Absolute totals sit at the right. The amber band is autoregressive decode; watch it swallow rows&nbsp;A–C and then vanish from row&nbsp;E onward.</figcaption>
+  </figure>
+
+  <div class="col">
+  <p>Three transitions in that chart carry the entire argument:</p>
+  <ul>
+    <li><strong>A → B (FP16 → INT8) buys 1.8×.</strong> Real, worth having, and nowhere near enough on its own. Quantization is necessary and insufficient.</li>
+    <li><strong>C → E (stop generating tokens) buys 9.7×.</strong> No weight has changed. You simply stopped paying 93 ms for each of 128 trajectory tokens and let the flow-matching expert read the prefill state directly. This is an architecture and training decision, not a runtime flag.</li>
+    <li><strong>E → H (distil the backbone) buys another 14×.</strong> And only here does the page cross into anything a robot could use.</li>
+  </ul>
+  </div>
+
+  <figure class="wide">
+    <div class="chart"><svg viewBox="0 0 920 190" role="img" aria-label="Total latency of each configuration on a logarithmic scale against the 99 millisecond on-vehicle target">
+  <title>Distance to the 99 ms on-vehicle target</title>
+  <line x1="60.0" y1="96" x2="60.0" y2="142" stroke="var(--line)" stroke-width="1"/>
+  <line x1="341.7" y1="96" x2="341.7" y2="142" stroke="var(--line)" stroke-width="1"/>
+  <line x1="558.3" y1="96" x2="558.3" y2="142" stroke="var(--line)" stroke-width="1"/>
+  <line x1="774.8" y1="96" x2="774.8" y2="142" stroke="var(--line)" stroke-width="1"/>
+  <line x1="60" y1="96" x2="845" y2="96" stroke="var(--muted)" stroke-width="1.25"/>
+  <line x1="124.2" y1="30" x2="124.2" y2="142" stroke="var(--signal)" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="133.2" y="24" font-size="11.5" font-weight="600" fill="var(--signal)">99 ms on-vehicle target</text>
+  <line x1="95.6" y1="68" x2="95.6" y2="96" stroke="var(--probe)" stroke-width="1.25"/>
+  <circle cx="95.6" cy="68" r="10.5" fill="var(--surface)" stroke="var(--probe)" stroke-width="1.75"/>
+  <text x="95.6" y="72" font-size="11" font-weight="600" fill="var(--probe)" text-anchor="middle">I<title>Student 0.4B INT8 + flex: 73 ms</title></text>
+  <line x1="151.3" y1="124" x2="151.3" y2="96" stroke="var(--probe)" stroke-width="1.25"/>
+  <circle cx="151.3" cy="124" r="10.5" fill="var(--surface)" stroke="var(--probe)" stroke-width="1.75"/>
+  <text x="151.3" y="128" font-size="11" font-weight="600" fill="var(--probe)" text-anchor="middle">H<title>Student 0.4B INT8: 132 ms</title></text>
+  <line x1="271.9" y1="68" x2="271.9" y2="96" stroke="var(--probe)" stroke-width="1.25"/>
+  <circle cx="271.9" cy="68" r="10.5" fill="var(--surface)" stroke="var(--probe)" stroke-width="1.75"/>
+  <text x="271.9" y="72" font-size="11" font-weight="600" fill="var(--probe)" text-anchor="middle">G<title>Student 1.5B INT8: 476 ms</title></text>
+  <line x1="288.2" y1="124" x2="288.2" y2="96" stroke="var(--probe)" stroke-width="1.25"/>
+  <circle cx="288.2" cy="124" r="10.5" fill="var(--surface)" stroke="var(--probe)" stroke-width="1.75"/>
+  <text x="288.2" y="128" font-size="11" font-weight="600" fill="var(--probe)" text-anchor="middle">F<title>Student 1.5B FP16: 566 ms</title></text>
+  <line x1="400.4" y1="68" x2="400.4" y2="96" stroke="var(--seg-decode)" stroke-width="1.25"/>
+  <circle cx="400.4" cy="68" r="10.5" fill="var(--surface)" stroke="var(--seg-decode)" stroke-width="1.75"/>
+  <text x="400.4" y="72" font-size="11" font-weight="600" fill="var(--seg-decode)" text-anchor="middle">E<title>10B W4, expert-only: 1,866 ms</title></text>
+  <line x1="542.8" y1="124" x2="542.8" y2="96" stroke="var(--seg-decode)" stroke-width="1.25"/>
+  <circle cx="542.8" cy="124" r="10.5" fill="var(--surface)" stroke="var(--seg-decode)" stroke-width="1.75"/>
+  <text x="542.8" y="128" font-size="11" font-weight="600" fill="var(--seg-decode)" text-anchor="middle">D<title>10B W4 + 4x token cut: 8,480 ms</title></text>
+  <line x1="614.0" y1="68" x2="614.0" y2="96" stroke="var(--seg-decode)" stroke-width="1.25"/>
+  <circle cx="614.0" cy="68" r="10.5" fill="var(--surface)" stroke="var(--seg-decode)" stroke-width="1.75"/>
+  <text x="614.0" y="72" font-size="11" font-weight="600" fill="var(--seg-decode)" text-anchor="middle">C<title>10B INT8, no CoC: 18,078 ms</title></text>
+  <line x1="673.4" y1="124" x2="673.4" y2="96" stroke="var(--seg-decode)" stroke-width="1.25"/>
+  <circle cx="673.4" cy="124" r="10.5" fill="var(--surface)" stroke="var(--seg-decode)" stroke-width="1.75"/>
+  <text x="673.4" y="128" font-size="11" font-weight="600" fill="var(--seg-decode)" text-anchor="middle">B<title>10B INT8, full CoC: 34,004 ms</title></text>
+  <line x1="729.9" y1="68" x2="729.9" y2="96" stroke="var(--seg-decode)" stroke-width="1.25"/>
+  <circle cx="729.9" cy="68" r="10.5" fill="var(--surface)" stroke="var(--seg-decode)" stroke-width="1.75"/>
+  <text x="729.9" y="72" font-size="11" font-weight="600" fill="var(--seg-decode)" text-anchor="middle">A<title>10B FP16, full CoC: 62,060 ms</title></text>
+  <text x="60.0" y="158" font-size="10.5" fill="var(--muted)" text-anchor="middle">50 ms</text>
+  <text x="341.7" y="158" font-size="10.5" fill="var(--muted)" text-anchor="middle">1 s</text>
+  <text x="558.3" y="158" font-size="10.5" fill="var(--muted)" text-anchor="middle">10 s</text>
+  <text x="774.8" y="158" font-size="10.5" fill="var(--muted)" text-anchor="middle">100 s</text>
+  <text x="115.2" y="182" font-size="10.5" fill="var(--signal)" text-anchor="end">faster than target</text>
+  <text x="133.2" y="182" font-size="10.5" fill="var(--muted)">slower</text>
+</svg></div>
+    <figcaption>The same nine totals on a log axis. Everything left of the dashed line is faster than the 99&nbsp;ms the Alpamayo-R1 paper reports for on-vehicle road tests — which was <strong>not</strong> measured on Xavier, and should never be quoted as a Xavier expectation. Note that A and I are separated by a factor of 850.</figcaption>
+  </figure>
+
+  <div class="col">
+  <p>Two calibration points against real hardware, for sanity. An 8&nbsp;B model at Q8 on an AGX Xavier has been reported at roughly 8.4 tokens/s decode on the NVIDIA developer forums, against the 10.8 tokens/s this roofline predicts for INT8 — close enough that the bandwidth model is not fantasy. And on the memory side, an independent 2026 systems paper measures Alpamayo-R1-10B's BF16 footprint at <strong>21.52 GB</strong>, against the 22.16 GB in the shard index. The model is consistent with what other people have actually seen.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="decision">
+  <div class="sechead"><div class="secnum">06</div><h2>Quantize, distil, or both</h2></div>
+  <div class="col">
+  <p class="lede">Here is the full lever set, with what each one actually multiplies. Ranking them by leverage rather than by familiarity is the main thing that separates a six-week project from a six-month one.</p>
+  </div>
+
+  <div class="tw wide">
+  <table>
+    <caption>"Multiplies" names the term in the latency budget the lever acts on — a lever that only touches decode cannot help a prefill-bound configuration, and vice versa.</caption>
+    <thead><tr><th>Lever</th><th>Multiplies</th><th class="n">Factor</th><th>Accuracy cost</th><th>Where it happens</th></tr></thead>
+    <tbody>
+      <tr><td>Runtime CoC removal</td><td>decode → ~0</td><td class="n">3–10×</td><td>Up to 12% planning accuracy on long-tail cases, per the paper's own trajectory-only ablation</td><td>Distillation objective</td></tr>
+      <tr><td>Backbone 8B → 0.4B</td><td>everything</td><td class="n">~17×</td><td>Large; must be recovered by distillation</td><td>H100</td></tr>
+      <tr><td>Backbone 8B → 1.5B</td><td>everything</td><td class="n">~4.6×</td><td>Moderate; recoverable</td><td>H100</td></tr>
+      <tr><td>Visual token compression</td><td>vision + prefill</td><td class="n">up to 20×</td><td>Reported neutral to positive with the Flex tokenizer</td><td>H100, needs retraining</td></tr>
+      <tr><td>W4 weight-only</td><td>decode + expert</td><td class="n">3.6×</td><td>Moderate; needs per-channel scales</td><td class="fault">No TRT 8.5 path — llama.cpp backbone only</td></tr>
+      <tr><td>INT8 weight-only</td><td>decode + expert</td><td class="n">2.0×</td><td>Small and measurable</td><td class="ok">TensorRT 8.5.2 on Xavier</td></tr>
+      <tr><td>CUDA graph on expert</td><td>expert launch overhead</td><td class="n">up to 2×</td><td>None</td><td class="ok">Xavier, already in the reference code</td></tr>
+      <tr><td>Flow steps 10 → 8</td><td>expert</td><td class="n">1.25×</td><td>Small; measure waypoint drift</td><td class="ok">Inference-time flag</td></tr>
+      <tr><td>FP8 / NVFP4</td><td>—</td><td class="n">—</td><td>—</td><td class="fault">Not available on sm_72 at all</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <h3>So: both, but the reasoning matters</h3>
+  <p><strong>Quantization is what makes the real 10 B model runnable and honest to measure.</strong> INT8 halves the weight footprint to 11.1 GB, which takes the model from "22 GB on a 32 GB board with a desktop running, hoping" to comfortable — and gives you a genuine end-to-end Alpamayo-1 latency figure on Xavier silicon. That number does not exist anywhere in the literature right now. It is worth having.</p>
+  <p><strong>Distillation is what makes it fast.</strong> But notice from the chart that most of the distillation win is not from having fewer parameters — it is from a student that has been trained to hand the action expert a plan without narrating it first. NVIDIA describes exactly this split publicly: Alpamayo&nbsp;1 as a cloud-side teacher, and 0.5–2&nbsp;B students on production automotive compute. Your Xavier is slower than the DRIVE Orin they have in mind, but the shape of the answer is identical.</p>
+  <p><strong>What I would not spend time on:</strong> CPU offload. The RTX 5070 Ti layer-swapping result that gets cited for Alpamayo works because a discrete GPU has a <em>second</em>, separate pool of host DRAM to stream from. Xavier's CPU and GPU share one 136.5 GB/s LPDDR4x pool, so "offloading" to the CPU moves nothing and buys nothing. NVMe-backed paging would extend capacity at roughly 20× worse bandwidth. Configure swap as a crash net, not as a strategy.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="plan">
+  <div class="sechead"><div class="secnum">07</div><h2>The plan, phase by phase</h2></div>
+  <div class="col">
+  <p class="lede">Ordered so that each phase yields a citable number that survives the next phase failing. Phase 2 in particular gives you the headline result in about three days, without the 22 GB download, without a port, and without needing anything in §3 to be solved.</p>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Phase<b>0</b></div>
+    <div class="pbody">
+      <h3>Freeze the measurement state</h3>
+      <div class="meta"><span><b>½ day</b></span><span>Xavier</span><span>blocks everything downstream</span></div>
+      <p>Every latency number you report is meaningless unless the board was in a known power state. Lock it once and record the state in every result file.</p>
+      <pre><code><span class="c"># MAXN + static max clocks; record what you actually got</span>
+sudo nvpmodel -m 0
+sudo jetson_clocks
+sudo nvpmodel -q --verbose | tee results/power_mode.txt
+cat /sys/devices/system/cpu/online
+
+<span class="c"># drop the desktop — worth ~1.5 GB of the 32 you need</span>
+sudo systemctl set-default multi-user.target
+sudo reboot
+
+<span class="c"># NVMe-backed swap: a crash net for the FP16 attempt, NOT a performance path</span>
+sudo fallocate -l 32G /mnt/ssdhome/swapfile
+sudo chmod 600 /mnt/ssdhome/swapfile
+sudo mkswap /mnt/ssdhome/swapfile &amp;&amp; sudo swapon /mnt/ssdhome/swapfile
+
+<span class="c"># log the whole board alongside every run</span>
+sudo tegrastats --interval 500 --logfile results/tegrastats_$(date +%s).log &amp;</code></pre>
+      <p>If <code>SWAP</code> in tegrastats moves during a timed run, that run is not a steady-state result — discard it and say so.</p>
+      <div class="deliv"><b>Deliverable</b>A frozen, documented bench state and a tegrastats log format you reuse for every subsequent measurement.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Phase<b>1</b></div>
+    <div class="pbody">
+      <h3>Calibrate the roofline on your actual silicon</h3>
+      <div class="meta"><span><b>1 day</b></span><span>Xavier</span><span>replaces the 45% / 60% assumptions with measurements</span></div>
+      <p>Reuse the environment you already built for CLIP, or clone it. The PyTorch wheel is the same one — it is the only CUDA-enabled option that exists for this board.</p>
+      <pre><code>source /mnt/ssdhome/models/env.sh
+python3 -m venv /mnt/ssdhome/models/envs/alpamayo-jp5
+source /mnt/ssdhome/models/envs/alpamayo-jp5/bin/activate
+
+pip install --no-cache-dir pip==23.3.2 setuptools==68.2.2 wheel==0.41.3 numpy==1.23.5
+pip install --no-cache-dir \
+  'https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl'
+
+python bench/xavier_hw_probe.py | tee results/hw_probe.txt</code></pre>
+      <p>The probe times FP16 GEMMs at the <em>exact</em> M,N,K triples Alpamayo issues — 1550×4096×4096, 1550×12288×4096, 5760×4304×1152, and the degenerate M=1 decode shapes — plus a streaming-bandwidth sweep. It prints back a measured MFU and MBU. Substitute both into <code>bench/roofline.py</code> and re-run it; every prediction in §5 shifts to your board.</p>
+      <p>Two things to watch for. <code>torch.cuda.is_bf16_supported()</code> may report <code>True</code> on sm_72 — it is a known PyTorch inconsistency and it is lying; check <code>get_device_capability()</code> instead. And if the M=1 GEMMs come in near the large-GEMM MFU rather than far below it, your <code>jetson_clocks</code> did not take.</p>
+      <div class="deliv"><b>Deliverable</b>Measured effective TFLOP/s and GB/s for your board, and a corrected prediction table. This alone is a legitimate small contribution — published Xavier roofline numbers for transformer shapes are scarce.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Phase<b>2</b></div>
+    <div class="pbody">
+      <h3>Shape-faithful stage benchmark — the headline result</h3>
+      <div class="meta"><span><b>2–3 days</b></span><span>Xavier</span><span>no weights, no port, no download</span></div>
+      <p>This is the phase I would push hardest. <code>alpamayo_stage_bench.py</code> rebuilds Alpamayo-1's exact tensor shapes — 27 ViT blocks at d=1152, 36 decoder layers at d=4096 with 32/8 GQA and QK-norm, 36 expert layers at d=2048 cross-attending into the backbone KV — in FP16 with random weights, and times each stage separately with CUDA events.</p>
+      <p><strong>Why random weights are legitimate:</strong> Alpamayo-1 is fully dense. No mixture-of-experts, no early exit, no data-dependent routing. The wall-clock latency of a dense transformer is a function of shapes, dtype and kernel selection alone. These are not estimates of Xavier latency; they <em>are</em> Xavier latency, obtained without needing Python 3.12, bfloat16 or FlashAttention to exist.</p>
+      <pre><code><span class="c"># fast pass: build 4 layers, scale to 36 (fits in ~3 GB)</span>
+python bench/alpamayo_stage_bench.py --llm-layers 4 --expert-layers 4 \
+    --json results/stage_l4.json
+
+<span class="c"># true full stack — needs the headless boot from Phase 0</span>
+python bench/alpamayo_stage_bench.py --llm-layers 36 --expert-layers 36 \
+    --vision-layers 27 --json results/stage_full.json
+
+<span class="c"># the sweep that produces the design-space curve</span>
+for pre in 200 470 800 1150 1550 2000; do
+  python bench/alpamayo_stage_bench.py --llm-layers 4 --expert-layers 4 \
+      --prefill $pre --json results/sweep_pre_$pre.json
+done
+for f in 4 6 8 10; do
+  python bench/alpamayo_stage_bench.py --stages expert --expert-layers 4 \
+      --flow-steps $f --json results/sweep_flow_$f.json
+done</code></pre>
+      <p>Run the 4-layer and 36-layer versions and compare. If the extrapolation from 4 layers lands within a few percent of the real 36, you have earned the right to sweep the whole design space cheaply — which is what makes the student-model search in Phase 5 affordable.</p>
+      <p>Compare <code>--sdp mem_efficient</code> against <code>--sdp math</code> too. The memory-efficient backend should win at prefill and may lose at decode, and knowing which is which tells you what to force in the real port.</p>
+      <div class="deliv"><b>Deliverable</b>Measured per-stage Xavier latency for Alpamayo-1's exact shapes: vision, prefill, per-token decode, expert. Plus the token-budget curve that tells you what a student would have to look like.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Phase<b>3</b></div>
+    <div class="pbody">
+      <h3>Real weights, FP16, validated against an H100 golden run</h3>
+      <div class="meta"><span><b>1–2 weeks</b></span><span>H100 then Xavier</span><span>the fidelity result</span></div>
+      <h4>On the H100 — establish ground truth first</h4>
+      <pre><code>uv venv ar1_venv &amp;&amp; source ar1_venv/bin/activate &amp;&amp; uv sync --active
+hf download nvidia/Alpamayo-R1-10B --local-dir ckpt/alpamayo1
+python src/alpamayo_r1/test_inference.py</code></pre>
+      <p>Then capture golden tensors — you cannot debug a port without them. Dump, for one fixed input clip: the merged visual embeddings, the backbone hidden state at layers 0 / 18 / 35, the full KV cache, the sampled token ids, and the final 64 waypoints. Save as FP32 <code>.npz</code>.</p>
+      <h4>Audit the bfloat16 → float16 cast before trusting it</h4>
+      <p>Do not blind-<code>.half()</code> 22 GB. BF16 carries FP32's exponent range; FP16 saturates at 65,504 and flushes below 6e-5. Find out which tensors care:</p>
+      <pre><code>import safetensors.torch as st, glob, torch
+FP16_MAX = 65504.0
+for shard in sorted(glob.glob("ckpt/alpamayo1/*.safetensors")):
+    for name, w in st.load_file(shard).items():
+        f = w.float()
+        mx, tiny = f.abs().max().item(), (f.abs() &lt; 6e-5).float().mean().item()
+        if mx &gt; FP16_MAX * 0.5 or tiny &gt; 0.02:
+            print(f"{name:64s} max {mx:12.4f}  subnormal-frac {tiny:.4f}")</code></pre>
+      <p>Expect the LayerNorm/RMSNorm gains and the vision <code>patch_embed</code> to be the interesting ones. Anything that overflows gets held in FP32 — they are tiny vectors and cost nothing. Anything with heavy underflow gets a per-tensor scale folded into the adjacent norm.</p>
+      <h4>On the Xavier — the port</h4>
+      <p>Take the decoder layer already written in <code>alpamayo_stage_bench.py</code> and give it real weights. The substitutions forced by §3, in full:</p>
+      <ul>
+        <li><code>flash_attention_2</code> → <code>F.scaled_dot_product_attention</code> under <code>torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=True)</code></li>
+        <li>GQA → manual <code>repeat_interleave</code> of KV heads by 4; torch 2.1 has no <code>enable_gqa</code></li>
+        <li><code>torch.nn.RMSNorm</code> → hand-written, accumulating in FP32; it does not exist before torch 2.4</li>
+        <li>bf16 → fp16 everywhere, with the FP32 exceptions from the audit</li>
+        <li><code>transformers</code> Qwen3-VL processor → your own preprocessing; do not try to install 4.57 on cp38</li>
+      </ul>
+      <p>Validate layer by layer against the golden dump — cosine similarity per hidden state, then final waypoint L2 in metres. A port that produces plausible-looking trajectories but has a silently wrong RoPE base or a transposed QK-norm is the failure mode here, and only layerwise comparison catches it.</p>
+      <div class="deliv"><b>Deliverable</b>First true end-to-end Alpamayo-1 inference on Jetson AGX Xavier, with a quantified FP16-vs-BF16 trajectory error. Expect roughly 30–60 s per inference; report it without embarrassment — it is the number nobody has.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Phase<b>4</b></div>
+    <div class="pbody">
+      <h3>INT8 through TensorRT 8.5.2</h3>
+      <div class="meta"><span><b>1–2 weeks</b></span><span>H100 exports, Xavier builds</span><span>the best the real model will do here</span></div>
+      <p>TensorRT 8.5.2 is what JetPack 5.1.7 ships and it is the last one Xavier will ever get. It has no INT4, no FP8, no paged attention and no TensorRT-LLM support — but it does have solid explicit-quantization INT8 for transformer graphs, which is exactly the era it was built for. Export four static-shape subgraphs rather than one model:</p>
+      <div class="tw">
+      <table>
+        <thead><tr><th>Engine</th><th>Shape</th><th>Precision</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>vision</td><td>[8, 720, 1152] → [1440, 4096]</td><td>INT8</td><td>Cleanest INT8 target; calibrate on real camera frames</td></tr>
+          <tr><td>prefill</td><td>[1, 1550, 4096] → hidden + KV</td><td>INT8 weights, FP16 activations</td><td>KV cache as a bound output</td></tr>
+          <tr><td>decode-step</td><td>[1, 1, 4096] + KV → logits</td><td>INT8 weights</td><td>Static max length; one engine, looped</td></tr>
+          <tr><td>expert-step</td><td>[1, 64, 2048] + backbone KV</td><td>FP16</td><td>Wrap the 10-step loop in a CUDA graph</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <pre><code><span class="c"># on the H100 — export only; opset 17, static shapes, external data for the big ones</span>
+python export_onnx.py --part vision  --out onnx/vision.onnx  --opset 17
+python export_onnx.py --part prefill --out onnx/prefill.onnx --opset 17 --seq 1550
+python export_onnx.py --part decode  --out onnx/decode.onnx  --opset 17 --max-len 2048
+python export_onnx.py --part expert  --out onnx/expert.onnx  --opset 17
+
+<span class="c"># on the Xavier — engines are architecture- and version-locked, so build on target</span>
+/usr/src/tensorrt/bin/trtexec --onnx=onnx/vision.onnx --int8 --fp16 \
+    --calib=calib/vision.cache --saveEngine=engines/vision_int8.plan \
+    --workspace=4096 --verbose 2&gt;&amp;1 | tee results/build_vision.log
+
+/usr/src/tensorrt/bin/trtexec --loadEngine=engines/vision_int8.plan \
+    --iterations=200 --avgRuns=100 --dumpProfile | tee results/trt_vision.txt</code></pre>
+      <p><code>--dumpProfile</code> gives you a per-layer breakdown, which is where you find the one unfused op quietly costing 40% of the engine. Validate numerics with <code>polygraphy run --trt --onnxrt --atol</code> against the same golden inputs from Phase 3.</p>
+      <p>Run a <strong>llama.cpp Q4_K_M build of a Qwen3-VL-8B</strong> alongside this, purely as a decode-rate reference point. It cannot run Alpamayo — the action expert's layerwise cross-attention into backbone KV has no expression in GGUF — but it tells you what W4 decode <em>would</em> cost on this board, which bounds how much a TRT INT4 path would have been worth if one existed. Build with <code>-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=72</code>, and pin a known-good revision; regressions on sm_72 are common and unmonitored upstream.</p>
+      <div class="deliv"><b>Deliverable</b>INT8 end-to-end latency for the real weights, per-layer TensorRT profiles, and trajectory error versus the FP16 golden. Expect roughly 18–35 s. This is the floor for the 10 B model on this hardware.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Phase<b>5</b></div>
+    <div class="pbody">
+      <h3>Distil a student that fits the board</h3>
+      <div class="meta"><span><b>4–8 weeks</b></span><span>H100</span><span>the only path to interactive rates</span></div>
+      <p>Target the design point the chart already identified: a <strong>0.4–1.5 B backbone, ~300 visual tokens, no autoregressive reasoning at runtime, 8 flow steps</strong>. That lands between 130 and 480 ms on Xavier — 2 to 8 Hz. Not a 99 ms robotaxi, but a real control loop on 2018 silicon, which is a genuinely interesting claim.</p>
+      <h4>Initialize, don't start over</h4>
+      <p>Since the backbone is Qwen3-VL-8B topology, initialize the student from <strong>Qwen3-VL-2B or 4B</strong>. Same tokenizer family, same vision-encoder lineage, same DeepStack merger structure — so teacher and student share a vocabulary and logit distillation is direct rather than approximate. Extend the student vocab with the same 4,000 trajectory bins and the six special token ids (<code>151669</code> onward, from <code>config.json</code>) and you can copy the teacher's trajectory-token embeddings straight across.</p>
+      <h4>Four losses, and drop the third at deployment</h4>
+      <ol>
+        <li><strong>Trajectory flow-matching loss</strong> against teacher waypoints — the objective that actually matters.</li>
+        <li><strong>Hidden-state alignment</strong> at the expert's input: this is what teaches the student to hand over a usable plan without narrating it.</li>
+        <li><strong>CoC logit KD</strong> on the reasoning trace — train with it so the student learns the causal structure, then never generate the trace at inference. This is the trick that buys the 9.7× in the chart.</li>
+        <li><strong>Token-budget curriculum</strong>: anneal the visual token count down from 1,440 toward ~300 during training rather than truncating a trained model.</li>
+      </ol>
+      <p>Use <code>NVlabs/alpamayo-recipes</code> as the training scaffold — <code>alpamayo1_sft</code> is a HuggingFace Trainer + DeepSpeed setup you can retarget to a student without rewriting the data pipeline. Ignore <code>alpamayo1_5_quant</code>; it emits FP8 and NVFP4, neither of which sm_72 can execute.</p>
+      <p>Search the student's shape with Phase 2's harness, not with training runs. Every candidate configuration costs a two-minute benchmark on Xavier instead of a GPU-week, so decide depth, width and token budget from measured latency <em>first</em>, then train the one design that fits the budget.</p>
+      <div class="deliv"><b>Deliverable</b>A student at 2–8 Hz on Xavier with a quantified accuracy gap to the 10 B teacher on open-loop planning metrics — and a latency-vs-accuracy curve across the student family, which is the actual publishable result.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="record">
+  <div class="sechead"><div class="secnum">08</div><h2>What to record, every run</h2></div>
+  <div class="col">
+  <p class="lede">You are producing comparisons across four precisions and several model sizes over months. Numbers that lack this metadata are not comparable to each other later, and you will not remember which was which.</p>
+  </div>
+  <div class="tw wide">
+  <table>
+    <caption>The bench scripts already emit most of this into their <code>--json</code> output. The three that need manual capture are the power mode, the tegrastats peaks, and the accuracy delta.</caption>
+    <thead><tr><th>Field</th><th>Why it matters</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>nvpmodel mode, jetson_clocks state</td><td>2× latency swings between modes; the single most common source of non-reproducible Jetson numbers</td><td><code>nvpmodel -q</code></td></tr>
+      <tr><td>torch / CUDA / TRT versions, sm</td><td>Locks the software stack to the measurement</td><td>bench <code>meta</code> block</td></tr>
+      <tr><td>dtype and SDPA backend</td><td>math vs mem_efficient changes prefill materially</td><td>bench <code>meta</code> block</td></tr>
+      <tr><td>prefill tokens, generated tokens, flow steps</td><td>The three knobs that dominate the total</td><td>bench <code>meta</code> block</td></tr>
+      <tr><td>p50 <em>and</em> p95 per stage</td><td>Thermal throttling shows up in p95 long before it shows in the mean</td><td>CUDA events</td></tr>
+      <tr><td>Peak CUDA allocation, RAM, SWAP delta</td><td>Any swap movement invalidates the run</td><td><code>tegrastats</code> + torch</td></tr>
+      <tr><td>GR3D_FREQ, EMC_FREQ, GPU temp, power rails</td><td>Distinguishes a slow kernel from a throttled board</td><td><code>tegrastats</code></td></tr>
+      <tr><td>Waypoint L2 vs. FP32 golden, in metres</td><td>Latency without an accuracy delta is not a result</td><td>Phase 3 golden dump</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="risks">
+  <div class="sechead"><div class="secnum">09</div><h2>Risks and open questions</h2></div>
+  <div class="col">
+  <p class="lede">Things I could not settle from the public record, and where I would expect the plan to bend.</p>
+  </div>
+
+  <details class="wide"><summary>The CoC trace length is unmeasured — and it sets the headline number</summary><div class="dbody">
+    <p>The paper describes traces as "concise and causally grounded" but publishes no token-length statistics, and the model card gives none. I assumed 300 generated tokens for configuration A. At 185 ms/token in FP16, every 100 tokens of error moves the total by 18.5 seconds. <strong>Measure this on the H100 in Phase 3</strong> — dump the actual trace lengths over a few hundred clips and re-run the roofline. It is a one-line change and it is the largest single uncertainty on the page.</p>
+  </div></details>
+
+  <details class="wide"><summary>Whether FP16 fits at all without swapping</summary><div class="dbody">
+    <p>22.16 GB of weights on a board that reports about 30.9 GiB GPU-accessible, minus a CUDA context (~600 MB–1 GB), minus activations, minus the OS. Headless it should fit; with the desktop running it will not. If Phase 3 thrashes, go INT8 first and treat FP16 as the accuracy reference computed on the H100 rather than a Xavier configuration.</p>
+  </div></details>
+
+  <details class="wide"><summary>TensorRT 8.5.2 may not fuse a Qwen3-style block cleanly</summary><div class="dbody">
+    <p>Per-head QK-norm inside the attention block is newer than TRT 8.5, and 4:1 GQA with an explicit KV-cache input is not a pattern that vintage optimizes well. Expect unfused elementwise chains in <code>--dumpProfile</code>. Mitigation: hand-write a plugin for the fused RMSNorm+RoPE+QK-norm prologue, or accept FP16 for the attention prologue and INT8 only for the four big GEMMs, which is where the bandwidth actually goes anyway.</p>
+  </div></details>
+
+  <details class="wide"><summary>The 45% MFU assumption is the weakest constant in §4 and §5</summary><div class="dbody">
+    <p>Volta iGPU efficiency on tall-skinny GEMMs under a 30 W cap is not well documented, and if the real figure is 30% rather than 45% every compute-bound row grows by half. This is exactly why Phase 1 exists and why it comes before anything expensive. Do not quote §5 numbers externally until Phase 1 has replaced the constants.</p>
+  </div></details>
+
+  <details class="wide"><summary>Xavier is end-of-life</summary><div class="dbody">
+    <p>NVIDIA has announced EOL for the AGX Xavier and Xavier NX families, and JetPack 5 is in sustaining mode. This does not affect the research — measuring a modern VLA on constrained legacy silicon is arguably <em>more</em> interesting because of it — but it does mean no toolchain relief is coming. Everything in §3 is permanent. Plan accordingly, and if a second board is ever an option, an AGX Orin would move you to CUDA 12, TensorRT 10, FP8, and the supported TensorRT-Edge-LLM Alpamayo path in one step.</p>
+  </div></details>
+</section>
+
+<hr class="rule">
+
+<section id="sources">
+  <div class="sechead"><div class="secnum">10</div><h2>Sources</h2></div>
+  <div class="col"><p class="lede">Architecture figures in §2 were read directly from the released checkpoint rather than from prose descriptions; everything else is linked below.</p></div>
+  <div class="srcs wide">
+    <a href="https://huggingface.co/nvidia/Alpamayo-R1-10B">nvidia/Alpamayo-R1-10B — model card, config.json, safetensors index</a>
+    <a href="https://github.com/NVlabs/alpamayo">NVlabs/alpamayo — reference implementation and pyproject.toml</a>
+    <a href="https://github.com/NVlabs/alpamayo1.5">NVlabs/alpamayo1.5 — 1.5 requirements and VRAM figures</a>
+    <a href="https://github.com/NVlabs/alpamayo-recipes">NVlabs/alpamayo-recipes — SFT, RL, and the FP8/NVFP4 quantization recipe</a>
+    <a href="https://arxiv.org/abs/2511.00088">Alpamayo-R1 — architecture, Flex tokenizer, 99 ms on-vehicle latency</a>
+    <a href="https://arxiv.org/abs/2605.11678">OOM-Free Alpamayo via CPU-GPU Memory Swapping — 21.52 GB footprint</a>
+    <a href="https://developer.nvidia.com/blog/building-autonomous-vehicles-that-reason-with-nvidia-alpamayo/">NVIDIA — Building Autonomous Vehicles That Reason with Alpamayo</a>
+    <a href="https://huggingface.co/nvidia/Cosmos-Reason1-7B">nvidia/Cosmos-Reason1-7B — the Cosmos-Reason backbone lineage</a>
+    <a href="https://deepwiki.com/NVIDIA/TensorRT-Edge-LLM">TensorRT-Edge-LLM — supported architectures (Thor, Orin, GB10; not Xavier)</a>
+    <a href="https://developer.nvidia.com/blog/nvidia-jetson-agx-xavier-32-teraops-ai-robotics/">NVIDIA — Jetson AGX Xavier: 512-core Volta, 11 TFLOPS FP16, 136.5 GB/s</a>
+    <a href="https://developer.download.nvidia.com/compute/redist/jp/v512/pytorch/">NVIDIA JetPack 5.1.2 PyTorch redistributables — torch 2.1.0 cp38 is the ceiling</a>
+    <a href="https://developer.nvidia.com/embedded/jetpack-archive">JetPack archive — Xavier tops out at JetPack 5.1.x / L4T r35</a>
+    <a href="https://github.com/ggml-org/llama.cpp/issues/13629">llama.cpp #13629 — sm_72 CUDA regressions on AGX Xavier</a>
+    <a href="https://forums.developer.nvidia.com/t/llama-cpp-loading-llama-3-1-very-slow-on-jetson-xavier-agx/305327/8">NVIDIA forums — 8B Q8 decode rate on AGX Xavier</a>
+    <a href="https://discuss.pytorch.org/t/current-cuda-device-does-not-support-bfloat16-please-switch-dtype-to-float16/201564">PyTorch — bfloat16 requires compute capability ≥ 8.0</a>
+    <a href="https://github.com/QwenLM/Qwen3-VL">QwenLM/Qwen3-VL — 2B/4B/8B/32B student initialization candidates</a>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <span>Alpamayo 1 (Alpamayo-R1-10B) · 11,078,526,194 params</span>
+  <span>Jetson AGX Xavier 32 GB · JetPack 5.1.7 · L4T r35.6.5 · sm_72</span>
+  <span>Predictions modelled at 45% MFU / 60% MBU — replace in Phase 1</span>
+</footer>
+
+</div>

@@ -1,0 +1,704 @@
+<title>Alpamayo Xavier Runbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+:root{
+  --ground:#EBEEF0; --surface:#FFFFFF; --sunken:#E1E6E9;
+  --ink:#101619; --ink-2:#39474F; --muted:#5E6D77; --line:#CBD3D8; --line-2:#DDE3E7;
+  --signal:#A54C00; --signal-soft:#F4E4D2;
+  --probe:#0A6060; --fault:#93261C; --ok:#2C6B3F;
+  --seg-vision:#0A6060; --seg-prefill:#2B5580; --seg-decode:#A54C00; --seg-expert:#63558A;
+  --shadow:0 1px 2px rgba(16,22,25,.06), 0 8px 24px -12px rgba(16,22,25,.18);
+  --display:"Archivo",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0D1216; --surface:#151C21; --sunken:#101619;
+    --ink:#E3E9EC; --ink-2:#B8C4CB; --muted:#85939D; --line:#2A353C; --line-2:#212A30;
+    --signal:#F0A04C; --signal-soft:#2E2011;
+    --probe:#48B8AF; --fault:#EB786B; --ok:#6FBF87;
+    --seg-vision:#3FA8A0; --seg-prefill:#6C9FD4; --seg-decode:#F0A04C; --seg-expert:#A497CA;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0D1216; --surface:#151C21; --sunken:#101619;
+  --ink:#E3E9EC; --ink-2:#B8C4CB; --muted:#85939D; --line:#2A353C; --line-2:#212A30;
+  --signal:#F0A04C; --signal-soft:#2E2011;
+  --probe:#48B8AF; --fault:#EB786B; --ok:#6FBF87;
+  --seg-vision:#3FA8A0; --seg-prefill:#6C9FD4; --seg-decode:#F0A04C; --seg-expert:#A497CA;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:var(--body); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased; margin:0;
+}
+.page{max-width:1240px;margin:0 auto;padding:0 28px 96px}
+.col{max-width:660px}
+.wide{max-width:940px}
+
+/* ---------- masthead ---------- */
+header.mast{padding:56px 0 34px;border-bottom:2px solid var(--ink)}
+.eyebrow{
+  font-family:var(--mono); font-size:11.5px; font-weight:500;
+  letter-spacing:.13em; text-transform:uppercase; color:var(--signal);
+  display:flex; flex-wrap:wrap; gap:6px 14px; margin-bottom:22px;
+}
+.eyebrow span:not(:last-child)::after{content:" ·";color:var(--muted);margin-left:14px}
+h1{
+  font-family:var(--display); font-weight:700; font-size:clamp(38px,6.4vw,66px);
+  line-height:1.02; letter-spacing:-.028em; margin:0 0 18px; text-wrap:balance;
+}
+.standfirst{font-size:20px;line-height:1.5;color:var(--ink-2);max-width:640px;margin:0}
+
+.specstrip{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(158px,1fr));
+  gap:0; border:1px solid var(--line); border-radius:3px; overflow:hidden;
+  margin:32px 0 0; background:var(--surface);
+}
+.specstrip div{padding:13px 16px;border-right:1px solid var(--line-2)}
+.specstrip div:last-child{border-right:none}
+.specstrip dt{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 5px
+}
+.specstrip dd{font-family:var(--mono);font-size:14px;font-weight:500;margin:0;color:var(--ink)}
+
+/* ---------- structure ---------- */
+main{display:block}
+section{padding-top:58px}
+.sechead{display:flex;gap:16px;align-items:baseline;margin-bottom:8px}
+.secnum{
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--signal);
+  letter-spacing:.06em;padding-top:6px;flex:none;
+}
+h2{
+  font-family:var(--display);font-weight:600;font-size:clamp(25px,3.3vw,33px);
+  letter-spacing:-.018em;line-height:1.15;margin:0;text-wrap:balance;
+}
+h3{
+  font-family:var(--display);font-weight:600;font-size:19px;letter-spacing:-.008em;
+  margin:38px 0 10px;text-wrap:balance;
+}
+h4{
+  font-family:var(--mono);font-weight:600;font-size:12px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);margin:26px 0 8px;
+}
+p{margin:0 0 15px}
+a{color:var(--signal);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--signal);outline-offset:3px;border-radius:2px}
+ul,ol{margin:0 0 15px;padding-left:21px}
+li{margin-bottom:7px}
+li::marker{color:var(--muted)}
+strong{font-weight:600}
+code{
+  font-family:var(--mono);font-size:.855em;background:var(--sunken);
+  padding:1px 5px;border-radius:3px;color:var(--ink);border:1px solid var(--line-2);
+}
+.lede{font-size:18.5px;color:var(--ink-2);margin-bottom:22px}
+hr.rule{border:none;border-top:1px solid var(--line);margin:52px 0 0}
+
+/* ---------- verdict ---------- */
+.verdict{
+  background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--signal);
+  border-radius:3px;padding:26px 28px;box-shadow:var(--shadow);margin:6px 0 0;
+}
+.verdict p:last-child{margin-bottom:0}
+.vline{
+  font-family:var(--display);font-size:21px;font-weight:600;line-height:1.32;
+  letter-spacing:-.012em;margin:0 0 14px;
+}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;margin:18px 0 6px;border:1px solid var(--line);border-radius:3px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:13px;min-width:520px}
+th{
+  text-align:left;font-weight:600;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+td{padding:9px 14px;border-bottom:1px solid var(--line-2);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.total td{border-top:1px solid var(--line);font-weight:600;background:var(--sunken)}
+caption{
+  caption-side:bottom;text-align:left;font-family:var(--body);font-size:13.5px;
+  color:var(--muted);padding:11px 14px;line-height:1.5;
+}
+.fault{color:var(--fault);font-weight:500}
+.ok{color:var(--ok);font-weight:500}
+
+/* ---------- code ---------- */
+pre{
+  background:var(--sunken);border:1px solid var(--line);border-radius:3px;
+  padding:15px 17px;overflow-x:auto;margin:14px 0;
+  font-family:var(--mono);font-size:12.5px;line-height:1.62;color:var(--ink);
+}
+pre code{background:none;padding:0;border:none;font-size:inherit}
+pre .c{color:var(--muted)}
+pre .k{color:var(--signal)}
+.filename{
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--muted);
+  margin:18px 0 -6px;text-transform:none;
+}
+
+/* ---------- blockers ---------- */
+.blockers{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:3px;overflow:hidden;background:var(--surface);margin:20px 0}
+.blocker{display:grid;grid-template-columns:58px 1fr;border-bottom:1px solid var(--line-2)}
+.blocker:last-child{border-bottom:none}
+.bid{
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--fault);
+  padding:16px 0 16px 16px;letter-spacing:.04em;
+}
+.bbody{padding:16px 18px 16px 0}
+.btitle{font-family:var(--display);font-weight:600;font-size:16px;margin:0 0 5px;letter-spacing:-.006em}
+.bbody p{font-size:15px;line-height:1.55;margin:0;color:var(--ink-2)}
+.bbody p+p{margin-top:8px}
+
+/* ---------- phases ---------- */
+.phase{
+  border-top:1px solid var(--line);padding-top:26px;margin-top:34px;
+  display:grid;grid-template-columns:82px 1fr;gap:0 22px;
+}
+.pnum{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--signal);padding-top:5px}
+.pnum b{display:block;font-family:var(--display);font-size:34px;font-weight:700;letter-spacing:-.03em;color:var(--ink);line-height:1;margin-top:4px}
+.pbody{min-width:0}
+.pbody h3{margin-top:0}
+.meta{
+  font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:5px 16px;margin:0 0 14px;
+}
+.meta b{color:var(--ink-2);font-weight:500}
+.deliv{
+  border-left:3px solid var(--probe);background:var(--surface);
+  padding:12px 16px;margin:16px 0 0;font-size:15px;line-height:1.55;
+}
+.deliv b{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--probe);display:block;margin-bottom:4px;font-weight:600}
+
+/* ---------- charts ---------- */
+figure{margin:26px 0 0}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:20px 18px;overflow-x:auto}
+.chart svg{display:block;min-width:660px;width:100%;height:auto}
+figcaption{font-size:13.5px;color:var(--muted);line-height:1.55;margin-top:11px;max-width:660px}
+svg text{font-family:"IBM Plex Mono",monospace}
+
+/* ---------- misc ---------- */
+details{border:1px solid var(--line);border-radius:3px;background:var(--surface);margin:16px 0;overflow:hidden}
+summary{
+  cursor:pointer;padding:13px 17px;font-family:var(--mono);font-size:12.5px;font-weight:500;
+  letter-spacing:.02em;color:var(--ink);list-style:none;
+}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸ ";color:var(--signal)}
+details[open] summary::before{content:"▾ "}
+details[open] summary{border-bottom:1px solid var(--line-2)}
+.dbody{padding:4px 17px 16px}
+.dbody pre{margin-top:12px}
+.dbody p{font-size:15px}
+
+.srcs{font-family:var(--mono);font-size:12.5px;line-height:1.75;columns:2;column-gap:40px}
+.srcs a{display:block;break-inside:avoid;margin-bottom:8px;color:var(--ink-2);text-decoration:none;border-bottom:1px solid var(--line)}
+.srcs a:hover{color:var(--signal);border-color:var(--signal)}
+
+footer{margin-top:64px;padding-top:22px;border-top:2px solid var(--ink);font-family:var(--mono);font-size:11.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 24px}
+
+@media (max-width:720px){
+  body{font-size:16px}
+  .page{padding:0 18px 64px}
+  .phase{grid-template-columns:1fr;gap:0}
+  .pnum{padding-bottom:10px}
+  .pnum b{display:inline;font-size:22px;margin-left:8px}
+  .blocker{grid-template-columns:44px 1fr}
+  .bid{padding-left:12px}
+  .srcs{columns:1}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style><style>
+/* runbook-specific additions */
+.lane{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:24px 0 0}
+.gate{border:1px solid var(--signal);border-left:4px solid var(--signal);background:var(--signal-soft);
+      border-radius:3px;padding:14px 18px;margin:20px 0;font-size:15.5px;line-height:1.55}
+.gate b{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+        color:var(--signal);display:block;margin-bottom:5px;font-weight:600}
+.stepnum{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--probe)}
+.host{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.09em;
+      text-transform:uppercase;padding:2px 7px;border-radius:2px;vertical-align:2px;margin-left:9px}
+.host.h100{background:var(--signal-soft);color:var(--signal);border:1px solid var(--signal)}
+.host.jetson{background:transparent;color:var(--probe);border:1px solid var(--probe)}
+</style>
+
+<div class="page">
+
+<header class="mast">
+  <div class="eyebrow">
+    <span>Runbook</span><span>H100 → AGX Xavier</span><span>TensorRT 8.5.2 / sm_72</span><span>Companion to the feasibility study</span>
+  </div>
+  <h1>Alpamayo Xavier Runbook</h1>
+  <p class="standfirst">Where quantization happens, what crosses the wire, and every command on both machines — from an empty H100 to a timed Alpamayo-1 inference on the Jetson.</p>
+  <dl class="specstrip">
+    <div><dt>Quantize on</dt><dd>H100</dd></div>
+    <div><dt>Compile on</dt><dd>Xavier</dd></div>
+    <div><dt>Transfer</dt><dd>≈ 19 GB</dd></div>
+    <div><dt>Engines</dt><dd>4 static graphs</dd></div>
+    <div><dt>Precisions</dt><dd>FP16, INT8</dd></div>
+    <div><dt>Verify gates</dt><dd>3, none skippable</dd></div>
+    <div><dt>Config</dt><dd>env.sh</dd></div>
+  </dl>
+</header>
+
+<main>
+
+<section id="answer">
+  <div class="sechead"><div class="secnum">01</div><h2>Yes — but not the way you're picturing it</h2></div>
+  <div class="col">
+  <p class="lede">You asked whether to quantize on the H100 and download the quantized model to the Xavier. Almost: the work splits, and the split is forced by two facts that pull in opposite directions.</p>
+  <p><strong>Calibration can only happen on the H100.</strong> Computing INT8 scales means pushing real driving clips through the full bfloat16 model to observe activation ranges — which needs Python 3.12, torch 2.8, FlashAttention and bfloat16. The Xavier has none of those and never will.</p>
+  <p><strong>Engine compilation can only happen on the Xavier.</strong> A TensorRT <code>.plan</code> is locked to the compute capability, the TensorRT version, and the specific GPU it was tuned on. A plan built on an H100 (sm_90, TRT 10.x) will refuse to deserialize on a Xavier (sm_72, TRT 8.5.2). There is no cross-compilation, no forward compatibility, no workaround.</p>
+  <p>So what you download is <strong>not a quantized checkpoint</strong>. It is a set of ONNX graphs with INT8 scales already baked in as Q/DQ nodes, plus the fixtures the Xavier cannot compute for itself. The Xavier turns those into engines locally, once, and keeps them.</p>
+  </div>
+
+  <figure class="wide">
+    <div class="chart">
+<svg viewBox="0 0 920 470" role="img" aria-label="Pipeline diagram showing which stages run on the H100 and which on the Xavier, and what crosses between them">
+  <title>What runs where, and what crosses</title>
+  <text x="40" y="26" font-size="11.5" font-weight="600" fill="var(--signal)">H100</text>
+  <text x="40" y="42" font-size="10.5" fill="var(--muted)">python 3.12 · torch 2.8 · flash-attn · bfloat16</text>
+  <text x="520" y="26" font-size="11.5" font-weight="600" fill="var(--probe)">JETSON AGX XAVIER</text>
+  <text x="520" y="42" font-size="10.5" fill="var(--muted)">python 3.8 · torch 2.1 · CUDA 11.4 · TensorRT 8.5.2 · sm_72</text>
+  <line x1="462" y1="16" x2="462" y2="440" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+
+  <g font-size="12" fill="var(--ink)">
+    <rect x="40" y="62" width="370" height="50" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+    <text x="56" y="82" font-weight="600">a1_golden.py</text>
+    <text x="56" y="99" font-size="10.5" fill="var(--muted)">reference run · golden tensors · CoC trace lengths</text>
+
+    <rect x="40" y="124" width="370" height="50" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+    <text x="56" y="144" font-weight="600">a2_cast_fp16.py</text>
+    <text x="56" y="161" font-size="10.5" fill="var(--muted)">bfloat16 overflow audit → float16</text>
+
+    <rect x="40" y="186" width="370" height="50" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+    <text x="56" y="206" font-weight="600">a3_export_onnx.py</text>
+    <text x="56" y="223" font-size="10.5" fill="var(--muted)">verify layer math · export 4 static graphs</text>
+
+    <rect x="40" y="248" width="370" height="50" rx="3" fill="var(--surface)" stroke="var(--signal)" stroke-width="1.5"/>
+    <text x="56" y="268" font-weight="600" fill="var(--signal)">a4_quantize_int8.py</text>
+    <text x="56" y="285" font-size="10.5" fill="var(--muted)">calibrate on real clips → Q/DQ nodes in the ONNX</text>
+
+    <rect x="520" y="124" width="360" height="50" rx="3" fill="var(--surface)" stroke="var(--probe)" stroke-width="1.5"/>
+    <text x="536" y="144" font-weight="600" fill="var(--probe)">build_engines.sh</text>
+    <text x="536" y="161" font-size="10.5" fill="var(--muted)">trtexec · 30–90 min · sm_72 tactic search</text>
+
+    <rect x="520" y="186" width="360" height="50" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+    <text x="536" y="206" font-weight="600">verify.py</text>
+    <text x="536" y="223" font-size="10.5" fill="var(--muted)">per-stage cosine against golden</text>
+
+    <rect x="520" y="248" width="360" height="50" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+    <text x="536" y="268" font-weight="600">run_alpamayo.py</text>
+    <text x="536" y="285" font-size="10.5" fill="var(--muted)">4 engines · CUDA-event stage timing</text>
+
+    <rect x="520" y="310" width="360" height="50" rx="3" fill="var(--surface)" stroke="var(--line)"/>
+    <text x="536" y="330" font-weight="600">tegrastats + results/</text>
+    <text x="536" y="347" font-size="10.5" fill="var(--muted)">power, clocks, thermals alongside every run</text>
+  </g>
+
+  <path d="M410 273 L462 273 L462 149 L512 149" fill="none" stroke="var(--signal)" stroke-width="1.75"/>
+  <path d="M512 149 l-9 -4.5 v9 z" fill="var(--signal)"/>
+  <text x="470" y="94" font-size="11" font-weight="600" fill="var(--signal)">onnx/ + fixtures/</text>
+  <text x="470" y="109" font-size="10.5" fill="var(--muted)">≈ 19 GB (INT8) · rsync once</text>
+
+  <g>
+    <rect x="40" y="386" width="840" height="54" rx="3" fill="var(--surface)" stroke="var(--fault)"/>
+    <text x="58" y="408" font-size="12" font-weight="600" fill="var(--fault)">Engines never cross this line.</text>
+    <text x="58" y="426" font-size="11" fill="var(--ink-2)">A .plan built on sm_90 / TRT 10 will not deserialize on sm_72 / TRT 8.5.2. Compile on the target, every time.</text>
+  </g>
+</svg>
+    </div>
+    <figcaption>Calibration needs the reference stack, which only the H100 has. Compilation needs the target silicon, which only the Xavier has. Everything in the runbook follows from that one constraint.</figcaption>
+  </figure>
+</section>
+
+<hr class="rule">
+
+<section id="wire">
+  <div class="sechead"><div class="secnum">02</div><h2>What crosses the wire</h2></div>
+  <div class="col">
+  <p class="lede">Copy this once and the Xavier never needs network access again — which matters, because the reference code resolves <code>Qwen/Qwen3-VL-8B-Instruct</code> and <code>Qwen/Qwen3-VL-2B-Instruct</code> at load time and the Jetson cannot run the code that would fetch them.</p>
+  </div>
+  <div class="tw wide">
+  <table>
+    <caption>Sizes are for the INT8 build. The FP16 build is roughly double and is worth transferring first, because it is the numerical reference the INT8 engines get judged against.</caption>
+    <thead><tr><th>Artefact</th><th class="n">Size</th><th>Why the Xavier cannot produce it</th></tr></thead>
+    <tbody>
+      <tr><td><code>onnx/vision.int8.onnx</code> + <code>.data</code></td><td class="n">0.6 GB</td><td>Traced from the real HF vision tower</td></tr>
+      <tr><td><code>onnx/prefill.int8.onnx</code> + <code>.data</code></td><td class="n">7.0 GB</td><td>36 layers of traced graph plus calibrated scales</td></tr>
+      <tr><td><code>onnx/decode.int8.onnx</code> + <code>.data</code></td><td class="n">7.6 GB</td><td>Same weights plus the LM head</td></tr>
+      <tr><td><code>onnx/expert.int8.onnx</code> + <code>.data</code></td><td class="n">2.3 GB</td><td>Action expert and the action projections</td></tr>
+      <tr><td><code>fixtures/embed_tokens.fp16.npy</code></td><td class="n">1.28 GB</td><td>155,697 × 4096 lookup table, used outside the graphs</td></tr>
+      <tr><td><code>fixtures/position_ids.npy</code></td><td class="n">&lt;1 MB</td><td>Qwen3-VL 3D mRoPE positions — deterministic for a fixed rig, and its <code>get_rope_index</code> lives in transformers 4.57</td></tr>
+      <tr><td><code>fixtures/input_ids.npy</code>, <code>visual_mask.npy</code>, <code>meta.json</code></td><td class="n">&lt;1 MB</td><td>Chat template and tokenizer output</td></tr>
+      <tr><td><code>golden/inputs.npz</code>, <code>activations.npz</code></td><td class="n">~0.4 GB</td><td>The reference tensors every Xavier stage is checked against</td></tr>
+      <tr class="total"><td>Total</td><td class="n">≈ 19 GB</td><td>Weights are shared between prefill and decode — dedupe if space is tight</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+  <p>Note what is <em>not</em> on that list: the 22 GB bfloat16 checkpoint, the reference repository, <code>transformers</code>, <code>flash-attn</code>, and any Qwen repo. None of it ever reaches the Jetson.</p>
+  </div>
+</section>
+
+<hr class="rule">
+<section id="paths">
+  <div class="sechead"><div class="secnum">03</div><h2>Paths</h2></div>
+  <div class="col">
+  <p class="lede">Set once in <code>env.sh</code> at the repository root; every script reads them from the environment, so nothing below has a path hard-coded into it.</p>
+  </div>
+  <div class="tw wide">
+  <table>
+    <caption>Derived artefacts default to scratch rather than into <code>/work</code>, because the ONNX graphs and their external-data files come to roughly 3–4× the checkpoint. Export <code>ALPAMAYO_ROOT</code> elsewhere before sourcing if your scratch is purged on a schedule you care about.</caption>
+    <thead><tr><th>Variable</th><th>Default</th><th class="n">Size</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><code>ALPAMAYO_REPO</code></td><td><code>/mnt/DISCL/work/bthapama/alpamayo-xavier</code></td><td class="n">&lt;1 MB</td><td>This repository — code only</td></tr>
+      <tr><td><code>ALPAMAYO_MODEL</code></td><td><code>/mnt/SHARED-SCRATCH/bthapama/alpamayo-models/Alpamayo-R1-10B</code></td><td class="n">22.2 GB</td><td>The released bf16 checkpoint, read-only</td></tr>
+      <tr><td><code>ALPAMAYO_ROOT</code></td><td><code>/mnt/SHARED-SCRATCH/bthapama/alpamayo-work</code></td><td class="n">60–90 GB</td><td>golden, fp16 checkpoint, ONNX, reference venv</td></tr>
+      <tr><td><code>HF_HOME</code></td><td><code>/mnt/SHARED-SCRATCH/bthapama/hf-cache</code></td><td class="n">~50 MB</td><td>Qwen config repos resolved at load time</td></tr>
+      <tr><td><code>ALPAMAYO_WORK</code></td><td><code>/mnt/ssdhome/models/alpamayo</code></td><td class="n">~35 GB</td><td>On the Jetson: ONNX, engines, fixtures, results</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+  <pre><code>source /mnt/DISCL/work/bthapama/alpamayo-xavier/env.sh
+alpamayo_check_paths</code></pre>
+  <pre><code>ok       ALPAMAYO_REPO = /mnt/DISCL/work/bthapama/alpamayo-xavier
+ok       ALPAMAYO_MODEL = /mnt/SHARED-SCRATCH/bthapama/alpamayo-models/Alpamayo-R1-10B
+ok       ALPAMAYO_ROOT = /mnt/SHARED-SCRATCH/bthapama/alpamayo-work
+ok       HF_HOME = /mnt/SHARED-SCRATCH/bthapama/hf-cache
+ok       checkpoint has 5 safetensors shards</code></pre>
+  <p>One shell subtlety worth knowing, because it fails quietly: <code>export VAR=… ; source env.sh</code> works, but <code>VAR=… source env.sh</code> does not persist past the <code>source</code>. <code>alpamayo_check_paths</code> detects that case and says <code>UNSET</code> rather than printing an empty path.</p>
+  <div class="gate"><b>Cluster caveat</b>Run <code>setup_h100.sh</code> on a <strong>login or data-transfer node</strong> the first time. Even with the Alpamayo weights already on scratch, <code>base_model.py</code> still calls <code>Qwen3VLConfig.from_pretrained("Qwen/Qwen3-VL-8B-Instruct")</code> for the architecture and <code>AutoProcessor.from_pretrained("Qwen/Qwen3-VL-2B-Instruct")</code> for the image pipeline. Config and tokenizer only — a few MB — but compute nodes usually have no route to huggingface.co. Once <code>HF_HOME</code> is populated, <code>export HF_HUB_OFFLINE=1</code> and run everything else on a compute node.</div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="h100">
+  <div class="sechead"><div class="secnum">04</div><h2>On the H100</h2></div>
+  <div class="col">
+  <p class="lede">Four stages. The third one contains a verification gate that will refuse to export if the graph math is wrong, and you should let it.</p>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>A1</b></div>
+    <div class="pbody">
+      <h3>Environment and the golden run<span class="host h100">H100</span></h3>
+      <div class="meta"><span><b>2–3 hours</b></span><span>~25 GB download</span></div>
+      <pre><code>source /mnt/DISCL/work/bthapama/alpamayo-xavier/env.sh
+alpamayo_check_paths
+
+<span class="c"># login node, first time only: reference venv + Qwen configs</span>
+bash "$ALPAMAYO_REPO/h100/setup_h100.sh"
+
+<span class="c"># the reference stack, exactly as NVIDIA pins it</span>
+source "$ALPAMAYO_ROOT/alpamayo/ar1_venv/bin/activate"
+
+<span class="c"># golden tensors, fixtures, and the trace-length distribution</span>
+python "$ALPAMAYO_REPO/h100/a1_golden.py" --clips 64 --max-new-tokens 256</code></pre>
+      <p>No download step: <code>a1</code> loads straight from <code>$ALPAMAYO_MODEL</code>, and <code>setup_h100.sh</code> verifies the five shards against <code>model.safetensors.index.json</code> before anything else runs — a truncated shard otherwise surfaces as an incomprehensible error two stages later.</p>
+      <p>Read <code>$ALPAMAYO_ROOT/golden/trace_stats.json</code> before anything else. It settles the largest open number in the whole project: how many reasoning tokens a typical clip actually produces. At 92.6 ms/token on a quantized Xavier, a p50 of 180 means 16.7 seconds of decode; a p50 of 40 means 3.7. Every downstream decision — how much quantization is worth, whether a student is necessary — moves with that one figure.</p>
+      <div class="deliv"><b>Deliverable</b><code>golden/</code>: inputs, activations at layers 0/8/16/24/35, the predicted waypoints, and measured trace lengths. Plus <code>fixtures/</code> for the Xavier.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>A2</b></div>
+    <div class="pbody">
+      <h3>Audit the bfloat16 → float16 cast<span class="host h100">H100</span></h3>
+      <div class="meta"><span><b>20 minutes</b></span><span>run the audit before the cast</span></div>
+      <p>Volta has no bfloat16 arithmetic, so every weight must become float16. bfloat16 carries float32's exponent range; float16 saturates at 65,504 and goes subnormal below 6.1e-5. A blind <code>.half()</code> on 22 GB is not safe, it is just usually lucky.</p>
+      <pre><code><span class="c"># src defaults to $ALPAMAYO_MODEL, dst to $ALPAMAYO_ROOT/ckpt/alpamayo-fp16</span>
+python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py" --audit-only
+
+<span class="c"># read the promotion list, then commit</span>
+python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py"</code></pre>
+      <p>Tensors that would overflow or lose more than 2% of their values to subnormals are kept in float32 and recorded in <code>cast_manifest.json</code>. Expect the norm gains and the vision <code>patch_embed</code> to show up; they are small vectors and the float32 promotion costs a few MiB. If a large <em>weight matrix</em> appears in that list, stop and investigate — that is a sign the checkpoint is not what you think it is.</p>
+      <div class="deliv"><b>Deliverable</b>A float16 checkpoint plus a manifest saying exactly which tensors were promoted and why.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>A3</b></div>
+    <div class="pbody">
+      <h3>Verify the graph math, then export<span class="host h100">H100</span></h3>
+      <div class="meta"><span><b>1–2 hours</b></span><span>this is the gate that matters most</span></div>
+      <p><code>graphs.decoder_layer</code> re-expresses a Qwen3 block in operations TensorRT 8.5 can consume — eager attention instead of SDPA, explicit GQA expansion, host-side RoPE. Before exporting anything, <code>a3</code> runs that re-expression against the real Hugging Face layer and compares:</p>
+      <pre><code>python "$ALPAMAYO_REPO/h100/a3_export_onnx.py"</code></pre>
+      <pre><code>verifying decoder_layer against the reference implementation
+  [ok ] decoder_layer                cos 0.999987  mae 3.1e-05  max 8.4e-04
+
+exporting vision
+  wrote vision.onnx  (1.15 GB)
+exporting prefill
+  wrote prefill.onnx  (13.9 GB)
+...</code></pre>
+      <div class="gate"><b>Gate 1</b>If <code>decoder_layer</code> does not match, the script exits and does not export. Do not raise the tolerance. Check, in this order: QK-norm applied per head <em>before</em> RoPE (Qwen3 changed this from Qwen2); the <code>rotate_half</code> convention; <code>repeat_interleave</code> rather than <code>repeat</code> for the 4:1 GQA expansion; and <code>rms_eps = 1e-6</code>. Each of those errors produces trajectories that look completely plausible and are wrong.</div>
+      <h4>Why four graphs and not one</h4>
+      <p>The four subgraphs have genuinely different shapes and precision needs, and TensorRT 8.5 has no notion of a KV cache, so a single model would have to re-run the prompt on every token.</p>
+      <div class="tw">
+      <table>
+        <thead><tr><th>Graph</th><th>Runs</th><th>Shape</th><th>Bound by</th></tr></thead>
+        <tbody>
+          <tr><td>vision</td><td>once</td><td>[11520, 1536] → [2880, 4096] + 3 DeepStack maps</td><td>compute</td></tr>
+          <tr><td>prefill</td><td>once</td><td>[1, 3000, 4096] → hidden + KV [36,1,8,3000,128]</td><td>compute</td></tr>
+          <tr><td>decode</td><td>per token</td><td>[1,1,4096] + cache → logits [1,1,155697]</td><td>bandwidth</td></tr>
+          <tr><td>expert</td><td>10×</td><td>[1,64,2] + backbone KV → velocity [1,64,2]</td><td>bandwidth</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Two design choices are worth knowing about because they will look odd in the ONNX. <strong>RoPE tables are computed on the host</strong> and passed in as plain tensors — Qwen3-VL's interleaved 3D mRoPE exports into a Gather/Slice thicket that TRT 8.5 will not fuse, and a 3,000-token table is 1.5 MB. <strong>The decode graph returns only its own 1-token KV slice</strong> rather than an updated cache, because TensorRT 8.5 cannot alias an input buffer to an output; returning the whole cache would copy ~490 MB per token, while the driver's <code>memcpy</code> of the slice moves 147 KB.</p>
+      <div class="deliv"><b>Deliverable</b>Four FP16 ONNX graphs plus <code>shapes.json</code>. Transfer these and get the FP16 path working end to end <em>before</em> touching A4.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>A4</b></div>
+    <div class="pbody">
+      <h3>Calibrate INT8 and bake in the scales<span class="host h100">H100</span></h3>
+      <div class="meta"><span><b>2–4 hours</b></span><span>only after FP16 verifies on the Xavier</span></div>
+      <p>Explicit quantization — Q/DQ nodes written into the graph — beats TensorRT's implicit calibrator here. It is reproducible, you can inspect where the scales landed, it does not depend on TRT 8.5's calibrator matching a modern one, and it means the Xavier needs no calibration data at all.</p>
+      <pre><code>python "$ALPAMAYO_REPO/h100/a1_golden.py" --clips 64 --dump-calib
+python "$ALPAMAYO_REPO/h100/a4_quantize_int8.py" --calib-clips 64</code></pre>
+      <p>Calibration inputs must come from real driving clips. Random tensors give ranges that are wrong in both directions — too wide on activations that are actually peaked, too narrow on the outlier channels that matter — and the resulting engine is fast and useless.</p>
+      <p>Some layers stay FP16 on purpose. The LM head is one enormous GEMM whose quantization error lands directly on token sampling; the norms and the action projections are tiny and numerically sensitive. Excluding all of them costs almost no bandwidth and removes the most likely sources of a silently degraded trajectory.</p>
+      <div class="deliv"><b>Deliverable</b><code>*.int8.onnx</code> with scales embedded, roughly half the size of the FP16 graphs.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="transfer">
+  <div class="sechead"><div class="secnum">05</div><h2>The transfer</h2></div>
+  <div class="col">
+  <p class="lede">One rsync, and mind the external-data files — an ONNX over 2 GB stores its weights beside it, and copying only the <code>.onnx</code> gives you a graph with no weights that fails at build time with a confusing error.</p>
+  <pre><code><span class="c"># on the H100 — note the trailing slashes and the .data glob</span>
+rsync -avh --progress --partial \
+    "$ALPAMAYO_ROOT/onnx/" \
+    bimal@&lt;xavier-ip&gt;:/mnt/ssdhome/models/alpamayo/onnx/
+
+rsync -avh --progress --partial \
+    "$ALPAMAYO_ROOT/fixtures/" "$ALPAMAYO_ROOT/golden/" \
+    bimal@&lt;xavier-ip&gt;:/mnt/ssdhome/models/alpamayo/
+
+<span class="c"># on the Xavier — confirm nothing landed on the 28 GB eMMC</span>
+df -h / /mnt/ssdhome
+du -sh /mnt/ssdhome/models/alpamayo/*
+ls /mnt/ssdhome/models/alpamayo/onnx/*.data</code></pre>
+  <p>Over gigabit this is roughly 3 minutes per GB. Use <code>--partial</code>; the Xavier's link will drop at some point during a 19 GB transfer and you do not want to start over.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="xavier">
+  <div class="sechead"><div class="secnum">06</div><h2>On the Xavier</h2></div>
+  <div class="col">
+  <p class="lede">Four steps, and the first one contains the single detail that stops most people before they start.</p>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>B1</b></div>
+    <div class="pbody">
+      <h3>Environment<span class="host jetson">Xavier</span></h3>
+      <div class="meta"><span><b>30 minutes</b></span><span>reusable across all later work</span></div>
+      <pre><code><span class="c"># on the Jetson, from a clone of the same repository</span>
+source ./env.sh          <span class="c"># MODELS_ROOT=/mnt/ssdhome/models, ALPAMAYO_WORK=$MODELS_ROOT/alpamayo</span>
+bash xavier/setup_xavier.sh</code></pre>
+      <div class="gate"><b>The detail everyone hits</b>The venv must be created with <code>--system-site-packages</code>. TensorRT's Python bindings ship as an apt dist-package at <code>/usr/lib/python3.8/dist-packages/tensorrt</code>, and there is no pip-installable TensorRT 8.5 wheel for aarch64/cp38. A plain <code>python3 -m venv</code> hides the system path and <code>import tensorrt</code> fails with a bare ImportError that suggests, wrongly, that TensorRT is missing.</div>
+      <p>The script refuses to run if <code>/mnt/ssdhome</code> is not on NVMe. That check exists because a missing mount silently redirects 15 GB of engines onto the 28 GB eMMC, and you find out when the root filesystem fills during an engine build.</p>
+      <p>Note that torch is installed here only for GPU buffer management and the embedding gather. The model itself runs entirely inside TensorRT — no PyTorch model code on the Jetson at all, which is what lets the whole thing work under Python 3.8.</p>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>B2</b></div>
+    <div class="pbody">
+      <h3>Build the engines<span class="host jetson">Xavier</span></h3>
+      <div class="meta"><span><b>30–90 minutes</b></span><span>once; then keep the plans</span></div>
+      <pre><code><span class="c"># FP16 first, always. It is the reference INT8 gets judged against.</span>
+PRECISION=fp16 bash xavier/build_engines.sh
+
+<span class="c"># later, after FP16 verifies</span>
+PRECISION=int8 bash xavier/build_engines.sh</code></pre>
+      <p>The script locks clocks with <code>nvpmodel -m 0</code> and <code>jetson_clocks</code> before building, which is not cosmetic: TensorRT picks kernels by timing candidate tactics, and a throttling board makes it choose genuinely worse ones that stay in the plan forever.</p>
+      <p>It builds with <code>--fp16</code> even for INT8. That flag is the fallback precision for any layer TensorRT declines to run in INT8; without it those layers fall back to FP32 and get dramatically slower.</p>
+      <p>Then read the profiles. This is the step people skip:</p>
+      <pre><code>grep -E "Reformat|Myelin|GPU Compute" logs/profile_decode.int8.log | head -40</code></pre>
+      <div class="gate"><b>Gate 2</b>If the decode profile is dominated by <code>Reformat</code> nodes, INT8 is <em>losing</em> to quantization overhead, not winning. TensorRT 8.5 predates Qwen3's per-head QK-norm and does not always fuse the attention prologue, so it can end up converting between INT8 and FP16 around every block. The fix is to exclude the attention prologue from quantization in A4 and keep INT8 only on the four large GEMMs — which is where the bandwidth is anyway. Always compare against the FP16 engine; if INT8 is not faster, say so and use FP16.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>B3</b></div>
+    <div class="pbody">
+      <h3>Verify before you time anything<span class="host jetson">Xavier</span></h3>
+      <div class="meta"><span><b>15 minutes</b></span><span>non-negotiable</span></div>
+      <pre><code>python xavier/verify.py --work "$ALPAMAYO_WORK" --precision fp16</code></pre>
+      <pre><code>1. vision tower
+  [ok ] visual_embeds          cos 0.999912  rel-mae 0.0031  (tol 2e-03)
+
+2. prefill (fed the GOLDEN vision output, to isolate the backbone)
+  [ok ] prefill_hidden         cos 0.999604  rel-mae 0.0087  (tol 5e-03)</code></pre>
+      <p>Each stage is fed the <em>golden</em> input for the stage before it, so a failure localizes instead of cascading. If vision passes and prefill fails, the fault is in the backbone graph or its scales, not in preprocessing.</p>
+      <div class="gate"><b>Gate 3</b>Every failure mode that matters here — a wrong RoPE base, a transposed QK-norm, GQA expanded with <code>repeat</code> instead of <code>repeat_interleave</code>, INT8 scales calibrated on the wrong tensor — still produces smooth, plausible-looking trajectories. Cosine similarity against the reference is the only thing that catches them. A latency number for a model computing the wrong thing is worse than no number, because you will believe it.</div>
+    </div>
+  </div>
+
+  <div class="phase wide">
+    <div class="pnum">Step<b>B4</b></div>
+    <div class="pbody">
+      <h3>Run it<span class="host jetson">Xavier</span></h3>
+      <div class="meta"><span><b>minutes per run</b></span><span>the measurement</span></div>
+      <pre><code><span class="c"># lock the board, log it, then run</span>
+sudo nvpmodel -m 0 &amp;&amp; sudo jetson_clocks
+sudo tegrastats --interval 500 --logfile "$ALPAMAYO_WORK/results/run_$(date +%s).log" &amp;
+
+python xavier/run_alpamayo.py \
+    --work "$ALPAMAYO_WORK" \
+    --images "$ALPAMAYO_WORK/frames/*.jpg" \
+    --precision int8 --max-new-tokens 256 --repeat 5 \
+    --json "$ALPAMAYO_WORK/results/int8_full.json"</code></pre>
+      <pre><code>stage                              ms    share     calls
+--------------------------------------------------------
+vision                         1406.2    4.7%         1
+embed assembly                   38.4    0.1%         1
+prefill                        4619.8   15.4%         1
+decode                        23704.1   78.9%       256
+expert                          331.6    1.1%         1
+--------------------------------------------------------
+TOTAL                         30100.1            0.033 Hz</code></pre>
+      <p>Then run the configuration that matters most:</p>
+      <pre><code>python xavier/run_alpamayo.py --work "$ALPAMAYO_WORK" \
+    --images "$ALPAMAYO_WORK/frames/*.jpg" \
+    --precision int8 --no-reasoning --repeat 5 \
+    --json "$ALPAMAYO_WORK/results/int8_noreason.json"</code></pre>
+      <p><code>--no-reasoning</code> skips the chain-of-causation rollout and hands the prefill state straight to the flow-matching expert. That is not a hack: the reference implementation already masks all 4,000 discrete trajectory tokens out of the rollout, so the expert has always been the thing that produces the trajectory. Skipping the trace should take you from ~30 s to ~6.4 s, and it costs planning quality on exactly the long-tail cases the model was built for — which is the trade to quantify, not to assume.</p>
+      <div class="deliv"><b>Deliverable</b>Per-stage Xavier latency at batch 1 for FP16 and INT8, with and without reasoning, alongside tegrastats. The first published numbers for this model on this class of hardware.</div>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+<section id="expect">
+  <div class="sechead"><div class="secnum">07</div><h2>What you should see</h2></div>
+  <div class="col">
+  <p class="lede">Modelled at 45% MFU and 60% MBU. If your measurements land within about 30% of these, the pipeline is behaving; if decode is 3× off, something is wrong before you start optimizing.</p>
+  </div>
+  <div class="tw wide">
+  <table>
+    <caption>Corrected against the reference source: 16 images at 720 patches each give 2,880 visual tokens and a ~3,000-token prefill, and the 128 trajectory tokens are never decoded — <code>ExpertLogitsProcessor</code> masks them for the whole rollout.</caption>
+    <thead><tr><th>Configuration</th><th class="n">Vision</th><th class="n">Prefill</th><th class="n">Decode</th><th class="n">Expert</th><th class="n">Total</th><th class="n">Weights</th></tr></thead>
+    <tbody>
+      <tr><td>FP16, 256 reasoning tokens</td><td class="n">2.81 s</td><td class="n">9.24 s</td><td class="n">47.4 s</td><td class="n">0.61 s</td><td class="n">60.1 s</td><td class="n">20.9 GB</td></tr>
+      <tr><td>INT8, 256 reasoning tokens</td><td class="n">1.41 s</td><td class="n">4.62 s</td><td class="n">23.7 s</td><td class="n">0.33 s</td><td class="n">30.1 s</td><td class="n">10.4 GB</td></tr>
+      <tr><td>INT8, trace capped at 96</td><td class="n">1.41 s</td><td class="n">4.62 s</td><td class="n">8.89 s</td><td class="n">0.33 s</td><td class="n">15.2 s</td><td class="n">10.4 GB</td></tr>
+      <tr><td>INT8, <code>--no-reasoning</code></td><td class="n">1.41 s</td><td class="n">4.62 s</td><td class="n">0</td><td class="n">0.33 s</td><td class="n">6.36 s</td><td class="n">10.4 GB</td></tr>
+      <tr><td>INT8, no reasoning, 4 frames</td><td class="n">0.35 s</td><td class="n">1.15 s</td><td class="n">0</td><td class="n">0.29 s</td><td class="n">1.80 s</td><td class="n">10.4 GB</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+  <p>The shape of that table is the finding. Quantization halves everything, which is real but is not the story. Dropping the reasoning rollout is worth 4.7×, and unlike quantization it is a runtime flag. And once reasoning is gone the model is <strong>compute-bound in vision and prefill</strong> — at which point the lever stops being bits and becomes visual tokens, which is why the distilled student in the feasibility study pairs a smaller backbone with a compressed tokenizer rather than more aggressive quantization.</p>
+  <p>Per-token decode should come out near <strong>185 ms in FP16 and 93 ms in INT8</strong>. That figure is almost pure memory bandwidth — 15.2 GB and 7.6 GB of weights respectively over a 136.5 GB/s bus — so it is the most predictable number in the table and the best early check that your INT8 engine is genuinely running in INT8.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="trouble">
+  <div class="sechead"><div class="secnum">08</div><h2>When it breaks</h2></div>
+  <div class="col">
+  <p class="lede">Failures specific to this combination of old TensorRT, unified memory and a model newer than the toolchain.</p>
+  </div>
+  <div class="tw wide">
+  <table>
+    <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>ImportError: No module named tensorrt</code></td><td>venv created without <code>--system-site-packages</code></td><td>Recreate it. There is no TRT 8.5 wheel for aarch64/cp38.</td></tr>
+      <tr><td><code>deserialize_cuda_engine</code> returns <code>None</code></td><td>Plan built on another machine or TRT version</td><td>Rebuild on the Xavier. Plans are not portable, ever.</td></tr>
+      <tr><td>Engine build killed by the OOM reaper</td><td>Tactic search plus a 14 GB graph on a 32 GB shared pool</td><td>Boot headless, build one engine at a time, drop <code>WORKSPACE_MB</code> to 2048.</td></tr>
+      <tr><td>Build fails: <em>tensor not found in initializer</em></td><td>Copied the <code>.onnx</code> without its <code>.data</code></td><td>Re-rsync; graphs over 2 GB keep weights in an external file.</td></tr>
+      <tr><td>INT8 slower than FP16</td><td>Reformat nodes between unfused Q/DQ pairs</td><td>Read <code>--dumpProfile</code>; restrict INT8 to the four large GEMMs.</td></tr>
+      <tr><td>Waypoints are NaN</td><td>FP16 overflow somewhere the audit did not catch</td><td>Check <code>cast_manifest.json</code>; the softmax and RMSNorm reductions must accumulate in FP32.</td></tr>
+      <tr><td>Reasoning trace is fluent then turns to noise</td><td>Trajectory tokens not masked during sampling</td><td>The 4,000 ids from <code>traj_token_start_idx</code> must be <code>-inf</code> every step.</td></tr>
+      <tr><td>Trace never terminates</td><td>Missing the <code>&lt;traj_future_start&gt;</code> stop id</td><td>Stop on token <code>155681</code>, and keep <code>--max-new-tokens</code> as a hard ceiling.</td></tr>
+      <tr><td>Trajectories are smooth but wrong</td><td>RoPE, QK-norm or GQA expansion error</td><td>This is what Gates 1 and 3 exist for. Do not tune tolerances to make them pass.</td></tr>
+      <tr><td>First run far slower than the rest</td><td>Plan deserialization and CUDA context creation</td><td>Expected. Use <code>--repeat 5</code> and report p50/p95, never the first iteration.</td></tr>
+      <tr><td><code>torch.cuda.is_bf16_supported()</code> says <code>True</code></td><td>Known PyTorch inconsistency on sm_72</td><td>It is lying. Trust <code>get_device_capability()</code>; bf16 needs ≥ (8,0).</td></tr>
+      <tr><td>Latency drifts upward across runs</td><td>Thermal throttling</td><td>Watch <code>GR3D_FREQ</code> and temperature in tegrastats; a rising p95 with a flat p50 is the signature.</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="files">
+  <div class="sechead"><div class="secnum">09</div><h2>The code</h2></div>
+  <div class="col">
+  <p class="lede">Everything referenced here is in the repository, split by which machine runs it. The <code>bench/</code> scripts need none of this pipeline and will give you real Xavier numbers in three days while the rest is being built.</p>
+  </div>
+  <div class="tw wide">
+  <table>
+    <thead><tr><th>File</th><th>Host</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>env.sh</code></td><td>both</td><td>Central path config and <code>alpamayo_check_paths</code></td></tr>
+      <tr><td><code>h100/arch.py</code></td><td>both</td><td>Architecture constants read out of the released checkpoint, not from prose</td></tr>
+      <tr><td><code>h100/a1_golden.py</code></td><td>H100</td><td>Reference run, golden tensors, CoC trace statistics, Xavier fixtures</td></tr>
+      <tr><td><code>h100/a2_cast_fp16.py</code></td><td>H100</td><td>bfloat16 overflow audit and cast, with a promotion manifest</td></tr>
+      <tr><td><code>h100/graphs.py</code></td><td>H100</td><td>The four export wrappers; wraps real HF modules so weights are never remapped</td></tr>
+      <tr><td><code>h100/a3_export_onnx.py</code></td><td>H100</td><td>Gate 1 plus ONNX export</td></tr>
+      <tr><td><code>h100/a4_quantize_int8.py</code></td><td>H100</td><td>Calibration and explicit Q/DQ insertion</td></tr>
+      <tr><td><code>xavier/setup_xavier.sh</code></td><td>Xavier</td><td>venv with system site-packages, NVMe guard, stack assertions</td></tr>
+      <tr><td><code>xavier/build_engines.sh</code></td><td>Xavier</td><td>trtexec builds and per-layer profiles</td></tr>
+      <tr><td><code>xavier/alpamayo_xavier/preprocess.py</code></td><td>Xavier</td><td>Qwen3-VL image pipeline in pure numpy — 1080×1920 → 320×576 → 720 patches</td></tr>
+      <tr><td><code>xavier/alpamayo_xavier/rope.py</code></td><td>Xavier</td><td>Interleaved 3D mRoPE tables, float64 then cast</td></tr>
+      <tr><td><code>xavier/alpamayo_xavier/trt_runner.py</code></td><td>Xavier</td><td>TensorRT 8.5 bindings backed by torch tensors; no pycuda</td></tr>
+      <tr><td><code>xavier/alpamayo_xavier/postprocess.py</code></td><td>Xavier</td><td>Unicycle integration to waypoints, plus minADE</td></tr>
+      <tr><td><code>xavier/verify.py</code></td><td>Xavier</td><td>Gate 3</td></tr>
+      <tr><td><code>xavier/run_alpamayo.py</code></td><td>Xavier</td><td>The driver, with CUDA-event stage timing</td></tr>
+      <tr><td><code>bench/*.py</code></td><td>Xavier</td><td>Hardware roofline and shape-faithful stage latency — independent of all the above</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+  <p>One honest caveat about the code. Every file is shape-checked and the logic follows the reference implementation closely, but none of it has been run against the real 22 GB checkpoint — I do not have your H100 or your Jetson. That is precisely why the three gates are structured the way they are: Gate 1 catches an error in my graph re-expression before you spend two hours exporting, and Gate 3 catches an error in the engines before you spend a week reporting numbers from them. Treat a gate failure as information about the code, not as a tolerance to loosen.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<section id="order">
+  <div class="sechead"><div class="secnum">10</div><h2>Order of work</h2></div>
+  <div class="col">
+  <p class="lede">Two rules, both learned by other people the expensive way.</p>
+  <ol>
+    <li><strong>FP16 end to end before INT8 anywhere.</strong> An INT8 engine that is wrong and an FP16 port that is wrong look identical from the outside, and if you build both at once you cannot tell which one broke. Get FP16 through Gate 3, record its latency, and only then quantize — with FP16 as the accuracy reference.</li>
+    <li><strong>Run <code>bench/</code> first, in parallel with all of this.</strong> The shape-faithful stage benchmark needs no weights, no ONNX, no engines and no H100. It gives you measured per-stage Xavier latency for Alpamayo's exact shapes in about three days. If the pipeline above stalls for a fortnight on a TensorRT fusion problem — a realistic outcome with an 8.5-era toolchain and a 2026 model — you still have the number that the work was for.</li>
+  </ol>
+  <p>And record the board state with every run: power mode, <code>jetson_clocks</code>, torch/TRT versions, precision, prefill length, generated tokens, flow steps, p50 <em>and</em> p95 per stage, peak allocation, and whether swap moved. Four precisions across several model sizes over months is a lot of numbers, and the ones lacking metadata are not comparable to each other later.</p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <span>Alpamayo-1 · 11,078,526,194 params · Qwen3-VL-8B backbone + π₀-style flow-matching expert</span>
+  <span>Jetson AGX Xavier 32 GB · JetPack 5.1.7 · TensorRT 8.5.2 · sm_72</span>
+  <span>Companion to the feasibility study</span>
+</footer>
+
+</div>
