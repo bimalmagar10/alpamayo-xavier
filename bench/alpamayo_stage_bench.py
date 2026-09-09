@@ -317,17 +317,29 @@ def main():
     free, total = torch.cuda.mem_get_info()
     print(f"device {torch.cuda.get_device_name(0)}  sm_{cap[0]}{cap[1]}   "
           f"torch {torch.__version__}  cuda {torch.version.cuda}")
-    print(f"memory {free / 2**30:.1f} GiB free / {total / 2**30:.1f} GiB   dtype {a.dtype}   sdp {a.sdp}\n")
+    print(f"memory {free / 2**30:.1f} GiB free / {total / 2**30:.1f} GiB   dtype {a.dtype}   sdp {a.sdp}")
+    if cap < (7, 5):
+        print("note   sm_%d%d has no flash or mem-efficient SDPA kernel; attention runs\n"
+              "       on the math backend and materialises the score matrix.\n" % cap)
+    else:
+        print()
 
     res = dict(meta=dict(device=torch.cuda.get_device_name(0), sm=f"{cap[0]}{cap[1]}",
                          torch=torch.__version__, cuda=torch.version.cuda, dtype=a.dtype,
                          sdp=a.sdp, prefill=a.prefill, gen_tokens=a.gen_tokens,
                          flow_steps=a.flow_steps, ts=time.strftime("%Y-%m-%dT%H:%M:%S")))
 
+    # sm_72 has neither a FlashAttention kernel nor PyTorch's memory-efficient
+    # kernel, so `math` must stay enabled as the fallback -- disabling it leaves
+    # SDPA with no backend at all and it raises
+    # "Torch was not compiled with flash attention".
+    # Attention on Xavier therefore materialises the score matrix; at 3006 tokens
+    # that is 32 heads x 3006^2 x 2 B = 578 MB per layer, freed as each layer
+    # completes under inference_mode.
     ctx = torch.backends.cuda.sdp_kernel(
-        enable_flash=False,                       # sm_72 has no FlashAttention kernel
+        enable_flash=False,
         enable_mem_efficient=a.sdp != "math",
-        enable_math=a.sdp != "mem_efficient",
+        enable_math=True,
     ) if a.sdp != "auto" else torch.backends.cuda.sdp_kernel()
 
     want = set(s.strip() for s in a.stages.split(","))

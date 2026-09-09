@@ -15,6 +15,32 @@ case "$SRC" in
      echo "Refusing to write ~15 GB of engines onto the 28 GB eMMC." >&2; exit 1 ;;
 esac
 
+# --- 0b. inventory: show what exists, and what this script will and will not touch
+echo
+echo "== already on this device (LEFT UNTOUCHED) =="
+for d in "$MODELS_ROOT"/envs/*/; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in
+      alpamayo-jp5) : ;;   # ours, reported below
+      *) printf "  venv        %-24s %s\n" "$(basename "$d")" "$(du -sh "$d" 2>/dev/null | cut -f1)" ;;
+    esac
+done
+for d in "$MODELS_ROOT"/checkpoints/*/; do
+    [ -d "$d" ] || continue
+    printf "  checkpoints %-24s %s\n" "$(basename "$d")" "$(du -sh "$d" 2>/dev/null | cut -f1)"
+done
+[ -d "$MODELS_ROOT/src" ] && printf "  src         %-24s %s\n" "" "$(du -sh "$MODELS_ROOT/src" 2>/dev/null | cut -f1)"
+echo
+echo "== this script will CREATE (and nothing else) =="
+echo "  $VENV"
+echo "  $WORK/{onnx,engines,golden,results,logs}"
+echo "  apt packages (additive; no removals, no autoremove)"
+echo
+echo "It contains no rm, no apt purge and no autoremove. Your CLIP venv,"
+echo "checkpoints and sources are in different directories and are not read,"
+echo "modified or deleted."
+echo
+
 mkdir -p "$WORK"/{onnx,engines,golden,results,logs}
 
 # --- 1. build deps -------------------------------------------------------
@@ -29,7 +55,11 @@ sudo apt-get clean
 # /usr/lib/python3.8/dist-packages/tensorrt, which a plain venv hides. There is
 # no pip-installable TensorRT 8.5 wheel for aarch64/cp38, so the venv must
 # inherit system packages or nothing will import.
-python3 -m venv --system-site-packages "$VENV"
+if [ -d "$VENV" ]; then
+    echo "reusing the existing venv at $VENV (nothing removed)"
+else
+    python3 -m venv --system-site-packages "$VENV"
+fi
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 

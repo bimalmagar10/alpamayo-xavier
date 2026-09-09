@@ -73,18 +73,49 @@ class Engine(object):
             raise RuntimeError("TensorRT execution failed for %s" % self.path)
         return self.outputs
 
+    def close(self):
+        """Release the engine and its bindings.
+
+        The four FP16 engines total ~35 GB of weights against ~25 GiB free on a
+        Xavier, so they cannot all be resident. Freeing each after its stage keeps
+        the peak at one engine plus the KV cache. INT8 halves the total and fits
+        everything at once.
+        """
+        for buf in list(self.inputs.values()) + list(self.outputs.values()):
+            del buf
+        self.inputs.clear()
+        self.outputs.clear()
+        self._bindings = []
+        del self.context
+        del self.engine
+        torch.cuda.empty_cache()
+
     def __repr__(self):
         ins = ", ".join("%s%s" % (k, v) for k, v in self.shapes.items())
         return "<Engine %s: %s>" % (self.path.split("/")[-1], ins)
 
 
-def load_engines(engine_dir, precision="int8", names=("vision", "prefill", "decode", "expert")):
+def engine_path(engine_dir, name, precision):
     import os
-    out = {}
+    p = os.path.join(engine_dir, "%s.%s.plan" % (name, precision))
+    if not os.path.exists(p):
+        raise SystemExit("missing %s -- run build_engines.sh first" % p)
+    return p
+
+
+def plan_bytes(engine_dir, precision, names=("vision", "prefill", "decode", "expert")):
+    import os
+    total = 0
     for n in names:
         p = os.path.join(engine_dir, "%s.%s.plan" % (n, precision))
-        if not os.path.exists(p):
-            raise SystemExit("missing %s -- run build_engines.sh first" % p)
-        out[n] = Engine(p)
+        if os.path.exists(p):
+            total += os.path.getsize(p)
+    return total
+
+
+def load_engines(engine_dir, precision="int8", names=("vision", "prefill", "decode", "expert")):
+    out = {}
+    for n in names:
+        out[n] = Engine(engine_path(engine_dir, n, precision))
         print("loaded %s" % out[n])
     return out

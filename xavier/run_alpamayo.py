@@ -30,7 +30,8 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from alpamayo_xavier import postprocess, preprocess, rope           # noqa: E402
-from alpamayo_xavier.trt_runner import load_engines                 # noqa: E402
+from alpamayo_xavier.trt_runner import (Engine, engine_path,        # noqa: E402
+                                        load_engines, plan_bytes)
 
 LAYERS, KV_HEADS, HEAD_DIM = 36, 8, 128
 N_WAYPOINTS, FLOW_STEPS = 64, 10
@@ -114,6 +115,10 @@ def main():
                          "planning accuracy on long-tail cases.")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--residency", default="auto", choices=["auto", "lazy", "resident"],
+                    help="auto: keep all engines resident if they fit, else load and "
+                         "release one stage at a time. The four FP16 engines total "
+                         "~35 GB against ~25 GiB free, so FP16 needs lazy; INT8 fits.")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
@@ -130,16 +135,41 @@ def main():
                                         torch.cuda.get_device_capability()))
     print("precision   : %s   prefill %d   cache %d" % (args.precision, prefill_len, max_seq))
 
-    eng = load_engines(os.path.join(work, "engines"), args.precision)
+    eng_dir = os.path.join(work, "engines")
+    need = plan_bytes(eng_dir, args.precision)
+    free, _ = torch.cuda.mem_get_info()
+    headroom = 2.5 * 2**30                       # KV cache, embed table, activations
+    mode = args.residency
+    if mode == "auto":
+        mode = "resident" if need + headroom < free else "lazy"
+    print("engines     : %.1f GB of plans, %.1f GiB free -> %s"
+          % (need / 1e9, free / 2**30, mode))
+    if mode == "lazy":
+        print("              (loading one stage at a time; add --residency resident "
+              "to override)")
+
+    eng = load_engines(eng_dir, args.precision) if mode == "resident" else {}
+
+    def get(name):
+        """Return the engine for a stage, loading it on demand in lazy mode."""
+        if name not in eng:
+            eng[name] = Engine(engine_path(eng_dir, name, args.precision))
+        return eng[name]
+
+    def release(name):
+        if mode == "lazy" and name in eng:
+            eng.pop(name).close()
+
     gen = torch.Generator(device="cuda").manual_seed(args.seed)
     timer = Timer()
 
     # ---- persistent state, allocated once ---------------------------------
     past_k = torch.zeros(LAYERS, 1, KV_HEADS, max_seq, HEAD_DIM, dtype=torch.float16, device="cuda")
     past_v = torch.zeros_like(past_k)
-    for name in ("decode", "expert"):
-        eng[name].bind("past_k", past_k)
-        eng[name].bind("past_v", past_v)
+    if mode == "resident":
+        for name in ("decode", "expert"):
+            eng[name].bind("past_k", past_k)
+            eng[name].bind("past_v", past_v)
     print("kv cache    : %.0f MiB resident\n" % (2 * past_k.numel() * 2 / 2**20))
 
     embed = torch.from_numpy(np.load(os.path.join(fx, "embed_tokens.fp16.npy"))).cuda()
@@ -163,7 +193,7 @@ def main():
 
         # ---- 2. vision tower ----------------------------------------------
         with timer("vision"):
-            vout = eng["vision"]({"pixel_values": pixel_values})
+            vout = get("vision")({"pixel_values": pixel_values})
         visual = vout["visual_embeds"]
         deepstack = [vout["deepstack%d" % i] for i in range(3)]
 
@@ -179,12 +209,13 @@ def main():
 
         # ---- 4. prefill ----------------------------------------------------
         with timer("prefill"):
-            pout = eng["prefill"]({"inputs_embeds": embeds, "cos": cos_p, "sin": sin_p,
+            pout = get("prefill")({"inputs_embeds": embeds, "cos": cos_p, "sin": sin_p,
                                    "deepstack0": ds_full[0], "deepstack1": ds_full[1],
                                    "deepstack2": ds_full[2]})
             past_k[:, :, :, :prefill_len].copy_(pout["k_cache"])
             past_v[:, :, :, :prefill_len].copy_(pout["v_cache"])
             hidden = pout["last_hidden"].clone()
+        release("prefill")
 
         # ---- 5. chain-of-causation rollout ---------------------------------
         pos = prefill_len
@@ -196,7 +227,10 @@ def main():
                 mask[..., max_seq] = 0.0                  # the token being generated
                 c, s = rope.tables(position_ids[:, pos:pos + 1])
                 with timer("decode"):
-                    dout = eng["decode"]({
+                    d_eng = get("decode")
+                    if mode == "lazy" and d_eng.inputs.get("past_k") is not past_k:
+                        d_eng.bind("past_k", past_k); d_eng.bind("past_v", past_v)
+                    dout = d_eng({
                         "hidden": hidden, "cos": c, "sin": s, "mask": mask})
                     past_k[:, :, :, pos:pos + 1].copy_(dout["new_k"])
                     past_v[:, :, :, pos:pos + 1].copy_(dout["new_v"])
@@ -216,16 +250,21 @@ def main():
         wcos, wsin = rope.tables(np.broadcast_to(wpos, (3, N_WAYPOINTS)))
         wcos, wsin = torch.from_numpy(wcos).cuda(), torch.from_numpy(wsin).cuda()
 
+        release("decode")
         x = torch.randn(1, N_WAYPOINTS, 2, dtype=torch.float16, device="cuda", generator=gen)
         ts = torch.linspace(0.0, 1.0, args.flow_steps + 1)
         with timer("expert"):
+            e_eng = get("expert")
+            if mode == "lazy" and e_eng.inputs.get("past_k") is not past_k:
+                e_eng.bind("past_k", past_k); e_eng.bind("past_v", past_v)
             for i in range(args.flow_steps):
                 dt = float(ts[i + 1] - ts[i])
                 t = torch.full((1, 1, 1), float(ts[i]), dtype=torch.float16, device="cuda")
-                out = eng["expert"]({"noisy_action": x, "timestep": t,
+                out = e_eng({"noisy_action": x, "timestep": t,
                                      "cos": wcos, "sin": wsin, "mask": emask})
                 x = x + dt * out["velocity"]
 
+        release("expert")
         xy, heading = postprocess.action_to_waypoints(x.float().cpu().numpy()[0])
 
         total = timer.report()
