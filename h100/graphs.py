@@ -24,6 +24,7 @@ are never remapped by name and cannot silently transpose.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 
 import torch
@@ -31,6 +32,47 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import arch
+
+
+# --------------------------------------------------------------------------
+# SDPA shim for export
+# --------------------------------------------------------------------------
+# transformers >= 4.5x calls scaled_dot_product_attention(..., enable_gqa=True)
+# instead of materialising the repeated KV heads. torch.onnx's TorchScript
+# exporter has no symbolic for that flag and asserts:
+#
+#   conversion of scaled_dot_product_attention not implemented if enable_gqa is True
+#
+# Expanding the KV heads by hand and dropping the flag produces an identical
+# result and exports cleanly. Doing it here rather than forcing eager attention
+# matters: eager would materialise an 11,520 x 11,520 score matrix per vision
+# layer (~4 GB) during tracing, whereas SDPA keeps the memory-efficient kernel
+# and the ONNX symbolic still emits plain MatMul/Softmax/MatMul, which is exactly
+# what TensorRT 8.5 wants.
+_ORIG_SDPA = F.scaled_dot_product_attention
+
+
+def _sdpa_expand_gqa(query, key, value, attn_mask=None, dropout_p=0.0,
+                     is_causal=False, scale=None, enable_gqa=False, **kwargs):
+    if enable_gqa:
+        rep = query.shape[-3] // key.shape[-3]
+        if rep > 1:
+            key = key.repeat_interleave(rep, dim=-3)
+            value = value.repeat_interleave(rep, dim=-3)
+    return _ORIG_SDPA(query, key, value, attn_mask=attn_mask, dropout_p=dropout_p,
+                      is_causal=is_causal, scale=scale, **kwargs)
+
+
+@contextlib.contextmanager
+def export_friendly_sdpa():
+    """Make every scaled_dot_product_attention call in the model exportable."""
+    F.scaled_dot_product_attention = _sdpa_expand_gqa
+    torch.nn.functional.scaled_dot_product_attention = _sdpa_expand_gqa
+    try:
+        yield
+    finally:
+        F.scaled_dot_product_attention = _ORIG_SDPA
+        torch.nn.functional.scaled_dot_product_attention = _ORIG_SDPA
 
 
 # --------------------------------------------------------------------------

@@ -429,8 +429,10 @@ python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py" --audit-only
 
 <span class="c"># read the promotion list, then commit</span>
 python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py"</code></pre>
-      <p>Tensors that would overflow or lose more than 2% of their values to subnormals are kept in float32 and recorded in <code>cast_manifest.json</code>. Expect the norm gains and the vision <code>patch_embed</code> to show up; they are small vectors and the float32 promotion costs a few MiB. If a large <em>weight matrix</em> appears in that list, stop and investigate — that is a sign the checkpoint is not what you think it is.</p>
-      <div class="deliv"><b>Deliverable</b>A float16 checkpoint plus a manifest saying exactly which tensors were promoted and why.</div>
+      <p>Only tensors that <em>overflow</em> are held in float32. Overflow is catastrophic — a value above 65,504 becomes <code>inf</code> and poisons everything downstream. Subnormals are a rounding detail: they are by definition the smallest weights in a tensor, fp16 still represents them with reduced mantissa, and the INT8 quantization in A4 is orders of magnitude coarser anyway. They are reported, not promoted.</p>
+      <p><strong>Measured on Alpamayo-1: no tensor overflows, or even reaches half the fp16 maximum.</strong> Six carry 2–5% subnormals — three MLP projections in layers 2–3, two DeepStack merger biases, one input LayerNorm — all harmless. A plain fp16 cast is safe.</p>
+      <p>That matters because <code>a3_export_onnx.py</code> loads the <em>original</em> bf16 checkpoint and casts to fp16 itself; it never reads this stage's output. <strong>The <code>--audit-only</code> pass is the deliverable</strong> — it is the gate on A3's blind cast. Once it comes back clean, skip the 22 GB checkpoint unless you also want a PyTorch fp16 fallback.</p>
+      <div class="deliv"><b>Deliverable</b>A verdict on whether A3’s fp16 cast is safe. On Alpamayo-1 it is — nothing overflows — so the checkpoint itself is optional.</div>
     </div>
   </div>
 
@@ -635,6 +637,7 @@ TOTAL                         30100.1            0.033 Hz</code></pre>
       <tr><td><code>ImportError: No module named tensorrt</code></td><td>venv created without <code>--system-site-packages</code></td><td>Recreate it. There is no TRT 8.5 wheel for aarch64/cp38.</td></tr>
       <tr><td><code>deserialize_cuda_engine</code> returns <code>None</code></td><td>Plan built on another machine or TRT version</td><td>Rebuild on the Xavier. Plans are not portable, ever.</td></tr>
       <tr><td>Engine build killed by the OOM reaper</td><td>Tactic search plus a 14 GB graph on a 32 GB shared pool</td><td>Boot headless, build one engine at a time, drop <code>WORKSPACE_MB</code> to 2048.</td></tr>
+      <tr><td><code>AssertionError: conversion of scaled_dot_product_attention not implemented if enable_gqa is True</code></td><td>transformers calls SDPA with <code>enable_gqa=True</code>; the TorchScript ONNX exporter has no symbolic for it</td><td>Wrap the export in <code>graphs.export_friendly_sdpa()</code>, which expands the KV heads with <code>repeat_interleave</code> and drops the flag. Do <em>not</em> force eager attention instead — that materialises an 11,520&times;11,520 score matrix per vision layer during tracing.</td></tr>
       <tr><td>Build fails: <em>tensor not found in initializer</em></td><td>Copied the <code>.onnx</code> without its <code>.data</code></td><td>Re-rsync; graphs over 2 GB keep weights in an external file.</td></tr>
       <tr><td>INT8 slower than FP16</td><td>Reformat nodes between unfused Q/DQ pairs</td><td>Read <code>--dumpProfile</code>; restrict INT8 to the four large GEMMs.</td></tr>
       <tr><td>Waypoints are NaN</td><td>FP16 overflow somewhere the audit did not catch</td><td>Check <code>cast_manifest.json</code>; the softmax and RMSNorm reductions must accumulate in FP32.</td></tr>
