@@ -80,7 +80,9 @@ def export(module, inputs, names_in, names_out, path: Path):
     tmp.unlink(missing_ok=True)
     Path(str(tmp) + ".data").unlink(missing_ok=True)
     size = sum(f.stat().st_size for f in path.parent.glob(path.name + "*")) / 1e9
-    print(f"  wrote {path.name}  ({size:.2f} GB)")
+    free, total = torch.cuda.mem_get_info()
+    print(f"  wrote {path.name}  ({size:.2f} GB)   gpu free {free / 2**30:.1f}/{total / 2**30:.1f} GiB")
+    torch.cuda.empty_cache()
 
 
 def _export_inner(module, inputs, names_in, names_out, tmp: Path):
@@ -129,6 +131,9 @@ def main():
                out / "vision.onnx")
 
     if "prefill" not in skip:
+        # no later graph references the vision tower; 1.15 GB back
+        model.vlm.model.visual = None
+        torch.cuda.empty_cache()
         print("exporting prefill")
         mod = graphs.PrefillGraph(lm, prefill, dtype).cuda().eval()
         inp = (zeros(1, prefill, 4096), cos, sin,

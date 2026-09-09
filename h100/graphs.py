@@ -25,7 +25,6 @@ are never remapped by name and cannot silently transpose.
 from __future__ import annotations
 
 import contextlib
-import math
 
 import torch
 import torch.nn as nn
@@ -136,13 +135,19 @@ def decoder_layer(layer, x, cos, sin, cfg, mask=None, past_k=None, past_v=None):
         k = torch.cat((past_k, k), dim=2)
         v = torch.cat((past_v, v), dim=2)
 
+    # Expand the KV heads by hand, then call SDPA WITHOUT enable_gqa.
+    #
+    # This deliberately does not spell out matmul/softmax/matmul. Writing it out
+    # materialises a [1, 32, S, S] score tensor per layer -- 3.3 GiB at S=3054 once
+    # the fp32 softmax cast is counted -- and the JIT tracer retains every one of
+    # them, so a 36-layer export needs ~120 GiB before the weights. SDPA keeps the
+    # memory-efficient kernel (24 MiB/layer) and torch.onnx's symbolic still emits
+    # plain MatMul/Softmax/MatMul, so TensorRT sees an identical graph.
     rep = nq // nkv
-    kx = k.repeat_interleave(rep, dim=1)
-    vx = v.repeat_interleave(rep, dim=1)
-    scores = torch.matmul(q, kx.transpose(-1, -2)) / math.sqrt(hd)
-    if mask is not None:
-        scores = scores + mask
-    attn = torch.matmul(F.softmax(scores.float(), dim=-1).to(q.dtype), vx)
+    if rep > 1:
+        k = k.repeat_interleave(rep, dim=1)
+        v = v.repeat_interleave(rep, dim=1)
+    attn = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0)
 
     x = x + a.o_proj(attn.transpose(1, 2).reshape(B, S, nq * hd))
     h = rms_norm(x, layer.post_attention_layernorm.weight, cfg["rms_eps"])
