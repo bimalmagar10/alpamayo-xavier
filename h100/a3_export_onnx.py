@@ -12,8 +12,10 @@ export on mismatch.
     python $ALPAMAYO_REPO/h100/a3_export_onnx.py
 """
 import argparse
+import gc
 import json
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -68,17 +70,42 @@ def verify_layer(model, dtype):
 
 
 def export(module, inputs, names_in, names_out, path: Path):
+    """Trace to a scratch directory, consolidate the weights, then validate.
+
+    Three details matter for a graph this size:
+
+    * The prefill graph carries ~13.9 GB of weights. protobuf refuses to serialize
+      a single message above 2 GB, so `onnx.checker.check_model(model_proto)` --
+      which calls SerializeToString() internally -- raises EncodeError. Checking by
+      *path* avoids materialising the proto and works at any size.
+    * The legacy exporter scatters external weights beside the .onnx as many files,
+      so tracing into a throwaway directory makes cleanup one rmtree instead of a
+      fragile glob.
+    * `save_model(all_tensors_to_one_file=True)` consolidates them into a single
+      `<name>.onnx.data`, which is what the transfer step to the Jetson expects.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp.onnx")
+    scratch = path.parent / f"{path.stem}__trace"
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    scratch.mkdir()
+    tmp = scratch / "model.onnx"
+
     with graphs.export_friendly_sdpa():
         _export_inner(module, inputs, names_in, names_out, tmp)
+
+    for stale in path.parent.glob(path.name + "*"):
+        stale.unlink()
     m = onnx.load(str(tmp))
-    onnx.checker.check_model(m, full_check=False)
     onnx.save_model(m, str(path), save_as_external_data=True,
                     all_tensors_to_one_file=True, location=path.name + ".data",
                     size_threshold=1024)
-    tmp.unlink(missing_ok=True)
-    Path(str(tmp) + ".data").unlink(missing_ok=True)
+    del m
+    gc.collect()
+    shutil.rmtree(scratch)
+
+    onnx.checker.check_model(str(path), full_check=False)   # by path: no 2 GB limit
+
     size = sum(f.stat().st_size for f in path.parent.glob(path.name + "*")) / 1e9
     free, total = torch.cuda.mem_get_info()
     print(f"  wrote {path.name}  ({size:.2f} GB)   gpu free {free / 2**30:.1f}/{total / 2**30:.1f} GiB")
