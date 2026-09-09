@@ -138,7 +138,10 @@ def main():
 
     g = np.load(golden / "inputs.npz", allow_pickle=True)
     grid = torch.tensor(g["image_grid_thw"], dtype=torch.long, device="cuda")
-    prefill = args.prefill or int(g["input_ids"].shape[1]) + arch.HISTORY_TRAJ_TOKENS
+    # The 48 <|traj_history|> placeholders are already inside the tokenized prompt
+    # (helper.create_message puts them in the text); fuse_traj_tokens replaces them
+    # via masked_scatter, which does not change the length. Adding 48 double-counts.
+    prefill = args.prefill or int(g["input_ids"].shape[1])
     print(f"prefill sequence {prefill}, cache {args.max_seq}, dtype float16\n")
 
     model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16)

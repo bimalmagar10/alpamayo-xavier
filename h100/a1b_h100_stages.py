@@ -74,7 +74,7 @@ def main():
     n_visual = n_vit // 4                       # after the 2x2 spatial merge
     res = dict(device=torch.cuda.get_device_name(0),
                vit_tokens=n_vit, visual_tokens=n_visual,
-               prompt_tokens=n_text, prefill_tokens=n_text + 48,
+               prompt_tokens=n_text, prefill_tokens=n_text,
                grid_thw=grid.tolist(), pixel_values=list(px.shape))
 
     print("=== token accounting (validates every static ONNX shape) ===")
@@ -83,7 +83,7 @@ def main():
     print("  ViT tokens        : %d   (predicted 11520)" % n_vit)
     print("  visual tokens     : %d   (predicted 2880)" % n_visual)
     print("  prompt tokens     : %d" % n_text)
-    print("  prefill + 48 traj : %d   (predicted ~3000)\n" % (n_text + 48))
+    print("  prefill tokens    : %d   (traj placeholders already included)\n" % n_text)
 
     with torch.autocast("cuda", dtype=torch.bfloat16), torch.inference_mode():
         print("=== per-stage timing (median of 5) ===")

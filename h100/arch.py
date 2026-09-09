@@ -74,12 +74,13 @@ VIT_TOKENS = VIT_TOKENS_PER_IMAGE * N_IMAGES     # 11_520
 VISUAL_TOKENS = LLM_TOKENS_PER_IMAGE * N_IMAGES  # 2_880
 
 N_WAYPOINTS = 64
-HISTORY_TRAJ_TOKENS = 48
+HISTORY_TRAJ_TOKENS = 48       # already inside the tokenized prompt; do NOT add to it
 FLOW_STEPS = 10                      # FlowMatching(num_inference_steps=10), Euler
 ACTION_DIMS = (N_WAYPOINTS, 2)       # acceleration, curvature
 
 # Static shapes the TensorRT engines are built for. MAX_SEQ must exceed
 # prefill + the longest reasoning trace you intend to allow.
+PREFILL_TOKENS = 3006          # measured: 2880 visual + 50 traj block + 76 chat
 MAX_SEQ = 3584
 DEFAULT_MAX_NEW_TOKENS = 256         # matches test_inference.py
 
