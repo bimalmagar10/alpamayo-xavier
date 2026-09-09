@@ -236,17 +236,25 @@ class ExpertGraph(nn.Module):
     why its KV geometry (8 heads x 128) matches the backbone exactly. It reads the
     same persistent cache buffers the decode engine writes."""
 
-    def __init__(self, expert, action_in_proj, action_out_proj, max_seq: int):
+    def __init__(self, expert, action_in_proj, action_out_proj, max_seq: int,
+                 dtype=torch.float16):
         super().__init__()
         self.expert = expert
-        self.action_in_proj = action_in_proj
+        # PerWaypointActionInProjV2.forward hard-casts its inputs with .float(),
+        # because the Fourier encoder takes sin/cos of arguments up to 2*pi*100 and
+        # genuinely needs the precision. The reference survives the resulting
+        # fp32-activation/bf16-weight mismatch only because it runs under autocast;
+        # an ONNX trace does not. Keep this module in fp32 -- it is 1.35 M params,
+        # so the cost is 2.7 MB and one Cast node -- and hand fp16 to the expert.
+        self.action_in_proj = action_in_proj.float()
         self.action_out_proj = action_out_proj
         self.max_seq = max_seq
+        self.dtype = dtype
         self.cfg = arch.EXPERT
 
     def forward(self, noisy_action, timestep, cos, sin, past_k, past_v, mask):
         """noisy_action [1,64,2]; timestep [1,1,1]; mask [1,1,64,MAX_SEQ+64]."""
-        h = self.action_in_proj(noisy_action, timestep)
+        h = self.action_in_proj(noisy_action.float(), timestep.float()).to(self.dtype)
         if h.dim() == 2:
             h = h.view(1, arch.N_WAYPOINTS, -1)
         for i, layer in enumerate(self.expert.layers):

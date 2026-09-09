@@ -182,7 +182,8 @@ def main():
     if "expert" not in skip:
         print("exporting expert")
         mod = graphs.ExpertGraph(model.expert, model.action_in_proj,
-                                 model.action_out_proj, args.max_seq).cuda().eval()
+                                 model.action_out_proj, args.max_seq,
+                                 dtype=dtype).cuda().eval()
         L, KV, HD, W = (arch.EXPERT["layers"], arch.EXPERT["kv_heads"],
                         arch.EXPERT["head_dim"], arch.N_WAYPOINTS)
         wpos = torch.arange(W).view(1, 1, -1).expand(3, 1, -1)
