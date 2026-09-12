@@ -12,6 +12,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/env.sh"
 alpamayo_check_paths || exit 1
 
+# The prefill export only fits on one 80 GB H100 without allocator fragmentation.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# Everything is cached by setup_h100.sh and a0_prefetch.py on the login node.
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+
 KEEP_GOLDEN=0
 [ "${1:-}" = "--keep-golden" ] && KEEP_GOLDEN=1
 
