@@ -61,6 +61,9 @@ python "$ALPAMAYO_REPO/h100/a2_cast_fp16.py" --audit-only \
 step "3  export four ONNX graphs  (~40 min)"
 python "$ALPAMAYO_REPO/h100/a3_export_onnx.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a3.log"
 
+step "3a make the graphs readable by TensorRT 8.5 (LayerNormalization -> primitives)"
+python "$ALPAMAYO_REPO/h100/a3c_decompose_layernorm.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a3c.log"
+
 step "3b fixtures for the Jetson"
 python "$ALPAMAYO_REPO/h100/a3b_fixtures.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a3b.log"
 

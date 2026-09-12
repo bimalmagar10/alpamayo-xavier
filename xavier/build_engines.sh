@@ -69,24 +69,38 @@ build() {
 
   echo; echo "== building $name from $(basename "$src")  ($(date +%H:%M)) =="
   echo "   progress: tail -f $LOG/build_$name.$PRECISION.log"
+  # --precisionConstraints=prefer: with plain --fp16, TensorRT may run layers the
+  # graph explicitly casts to fp32 in fp16 anyway. "prefer" makes it honour those
+  # casts where a kernel exists -- the LayerNorm statistics from a3c, the RMSNorm
+  # math, and the expert's fp32 action_in_proj (sin/cos of arguments up to 2*pi*100).
   local flags=(--onnx="$src" --saveEngine="$plan.tmp"
                --memPoolSize=workspace:"$WORKSPACE_MB"
                --timingCacheFile="$ENG/timing.cache"
+               --precisionConstraints=prefer
                --verbose)
   # fp16 stays on even for int8 builds: it is the fallback precision for any
   # layer TensorRT refuses to run in int8, and without it those fall back to fp32.
   flags+=(--fp16)
   [ "$PRECISION" = "int8" ] && flags+=(--int8)
 
-  if ! /usr/bin/time -v "$TRTEXEC" "${flags[@]}" > "$LOG/build_$name.$PRECISION.log" 2>&1; then
-    echo "[FAIL] $name -- last lines of $LOG/build_$name.$PRECISION.log:" >&2
-    tail -n 25 "$LOG/build_$name.$PRECISION.log" >&2
+  # GNU time adds peak memory to the log when installed (apt install time); the
+  # build does not depend on it.
+  local timer=()
+  [ -x /usr/bin/time ] && timer=(/usr/bin/time -v -o "$LOG/build_$name.$PRECISION.time")
+  local t0=$SECONDS
+  if ! ${timer[@]+"${timer[@]}"} "$TRTEXEC" "${flags[@]}" > "$LOG/build_$name.$PRECISION.log" 2>&1; then
+    echo "[FAIL] $name -- TensorRT errors from $LOG/build_$name.$PRECISION.log:" >&2
+    grep -E "\[E\]|ERROR|Assertion|Unsupported|not supported" \
+        "$LOG/build_$name.$PRECISION.log" | head -n 20 >&2 || true
+    echo "   ... last lines:" >&2
+    tail -n 12 "$LOG/build_$name.$PRECISION.log" >&2
     rm -f "$plan.tmp"
     return 1
   fi
   mv "$plan.tmp" "$plan"
+  echo "   built in $(( (SECONDS - t0) / 60 )) min $(( (SECONDS - t0) % 60 )) s"
   grep -E "Elapsed \(wall clock\)|Maximum resident set size" \
-      "$LOG/build_$name.$PRECISION.log" | sed 's/^[[:space:]]*/   /'
+      "$LOG/build_$name.$PRECISION.time" 2>/dev/null | sed 's/^[[:space:]]*/   /' || true
   echo "[done] $plan  ($(du -h "$plan" | cut -f1))"
 }
 
