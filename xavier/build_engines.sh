@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Build the four TensorRT engines ON the Xavier.
+# Runbook step B2 -- build the TensorRT engines ON the Xavier.
+#
+#   PRECISION=fp16 bash xavier/build_engines.sh                 every graph in onnx/
+#   PRECISION=fp16 bash xavier/build_engines.sh vision expert   just these
 #
 # Engines are not portable. A TensorRT plan file is locked to the compute
 # capability, the TensorRT version and the exact GPU it was built for, so an
 # engine built on the H100 (sm_90, TRT 10.x) cannot load here (sm_72, TRT 8.5.2).
 # The H100 produces ONNX; only this machine can produce .plan files.
 #
-# Expect this to take 30-90 minutes. The prefill and decode graphs are large and
-# TensorRT's tactic search on a Xavier CPU is slow. Run it once, keep the plans.
+# Flags are limited to what trtexec 8.5 accepts. --builderOptimizationLevel only
+# arrived in 8.6, and 8.5 exits on it as an unknown option.
+#
+# Expect 30-90 minutes in total; prefill and decode (15 GB each) are the slow ones.
 set -euo pipefail
 
 WORK="${ALPAMAYO_WORK:-/mnt/ssdhome/models/alpamayo}"
@@ -15,11 +20,18 @@ ONNX="$WORK/onnx"
 ENG="$WORK/engines"
 LOG="$WORK/logs"
 TRTEXEC=/usr/src/tensorrt/bin/trtexec
-PRECISION="${PRECISION:-int8}"      # int8 | fp16
+PRECISION="${PRECISION:-fp16}"      # fp16 | int8
 WORKSPACE_MB="${WORKSPACE_MB:-4096}"
+NAMES=("$@")
+[ ${#NAMES[@]} -eq 0 ] && NAMES=(vision expert prefill decode)   # smallest first
 
 mkdir -p "$ENG" "$LOG"
 [ -x "$TRTEXEC" ] || { echo "trtexec not found at $TRTEXEC" >&2; exit 1; }
+case "$PRECISION" in fp16|int8) ;; *) echo "PRECISION must be fp16 or int8" >&2; exit 2 ;; esac
+
+echo "TensorRT : $(dpkg-query -W -f='${Version}' tensorrt 2>/dev/null || echo unknown)"
+echo "disk     : $(df -h "$WORK" | awk 'NR==2 {print $4 " free on " $6}')"
+free -g | sed 's/^/  /'
 
 # Lock clocks so tactic timing is not measured against a throttling board --
 # a wandering clock makes TensorRT pick genuinely worse kernels.
@@ -27,44 +39,71 @@ sudo nvpmodel -m 0 || true
 sudo jetson_clocks || true
 
 build() {
-  local name="$1"; shift
+  local name="$1"
   local src="$ONNX/$name.onnx"
-  [ "$PRECISION" = "int8" ] && [ -f "$ONNX/$name.int8.onnx" ] && src="$ONNX/$name.int8.onnx"
   local plan="$ENG/$name.$PRECISION.plan"
 
-  if [ ! -f "$src" ]; then echo "[skip] $src missing"; return; fi
-  if [ -f "$plan" ]; then echo "[have] $plan"; return; fi
+  if [ "$PRECISION" = "int8" ]; then
+    # int8 without a4's calibrated Q/DQ graph makes trtexec invent scales: the
+    # engine builds and runs, and everything it outputs is wrong.
+    if [ ! -f "$ONNX/$name.int8.onnx" ]; then
+      echo "[skip] $name: no $name.int8.onnx from h100/a4_quantize_int8.py -- refusing uncalibrated int8"
+      return 0
+    fi
+    src="$ONNX/$name.int8.onnx"
+  fi
 
-  echo "== building $name from $(basename "$src") =="
-  local flags=(--onnx="$src" --saveEngine="$plan"
-               --memPoolSize=workspace:${WORKSPACE_MB}M
-               --builderOptimizationLevel=3 --verbose)
+  if [ -f "$plan" ]; then echo "[have] $plan"; return 0; fi
+  if [ ! -f "$src" ]; then echo "[skip] $(basename "$src") not in $ONNX"; return 0; fi
+  if [ "$PRECISION" = "fp16" ] && [ ! -f "$src.data" ]; then
+    echo "[skip] $name: $(basename "$src").data missing -- the weights must sit next to the .onnx"
+    return 0
+  fi
+  if [ "$name" = "prefill" ] || [ "$name" = "decode" ]; then
+    local swap_gb; swap_gb=$(free -g | awk '/^Swap/ {print $2}')
+    if [ "${swap_gb:-0}" -lt 16 ]; then
+      echo "[warn] $name holds 15 GB of weights and only ${swap_gb} GB swap is configured;"
+      echo "       the build can run out of memory. See the swap step in the runbook."
+    fi
+  fi
+
+  echo; echo "== building $name from $(basename "$src")  ($(date +%H:%M)) =="
+  echo "   progress: tail -f $LOG/build_$name.$PRECISION.log"
+  local flags=(--onnx="$src" --saveEngine="$plan.tmp"
+               --memPoolSize=workspace:"$WORKSPACE_MB"
+               --timingCacheFile="$ENG/timing.cache"
+               --verbose)
   # fp16 stays on even for int8 builds: it is the fallback precision for any
   # layer TensorRT refuses to run in int8, and without it those fall back to fp32.
   flags+=(--fp16)
   [ "$PRECISION" = "int8" ] && flags+=(--int8)
 
-  /usr/bin/time -v "$TRTEXEC" "${flags[@]}" "$@" 2>&1 | tee "$LOG/build_$name.$PRECISION.log"
+  if ! /usr/bin/time -v "$TRTEXEC" "${flags[@]}" > "$LOG/build_$name.$PRECISION.log" 2>&1; then
+    echo "[FAIL] $name -- last lines of $LOG/build_$name.$PRECISION.log:" >&2
+    tail -n 25 "$LOG/build_$name.$PRECISION.log" >&2
+    rm -f "$plan.tmp"
+    return 1
+  fi
+  mv "$plan.tmp" "$plan"
+  grep -E "Elapsed \(wall clock\)|Maximum resident set size" \
+      "$LOG/build_$name.$PRECISION.log" | sed 's/^[[:space:]]*/   /'
   echo "[done] $plan  ($(du -h "$plan" | cut -f1))"
 }
 
-build vision
-build prefill
-build decode
-build expert
+for n in "${NAMES[@]}"; do build "$n"; done
 
 echo
-echo "== per-engine profiles =="
-for name in vision prefill decode expert; do
-  plan="$ENG/$name.$PRECISION.plan"
+echo "== GPU compute time per engine call (random inputs, trtexec) =="
+for n in "${NAMES[@]}"; do
+  plan="$ENG/$n.$PRECISION.plan"
   [ -f "$plan" ] || continue
-  echo "-- $name --"
-  "$TRTEXEC" --loadEngine="$plan" --iterations=100 --avgRuns=50 --noDataTransfers \
-      --dumpProfile --separateProfileRun 2>&1 | tee "$LOG/profile_$name.$PRECISION.log" \
-      | grep -E "mean:|median:|GPU Compute Time" || true
+  if "$TRTEXEC" --loadEngine="$plan" --iterations=10 --avgRuns=10 --noDataTransfers \
+        --dumpProfile --separateProfileRun > "$LOG/profile_$n.$PRECISION.log" 2>&1; then
+    printf "  %-8s %s\n" "$n" "$(grep -E "GPU Compute Time" "$LOG/profile_$n.$PRECISION.log" | tail -1 | sed 's/.*GPU Compute Time: //')"
+  else
+    echo "  $n: profiling failed, see $LOG/profile_$n.$PRECISION.log"
+  fi
 done
 
 echo
-echo "Engines in $ENG. Read $LOG/profile_*.log before trusting any speedup:"
-echo "a decode engine whose profile is dominated by Reformat nodes is losing to"
-echo "quantization overhead, not winning from it."
+echo "Engines in $ENG. Next: python xavier/verify.py --precision $PRECISION"

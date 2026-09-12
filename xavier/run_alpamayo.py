@@ -126,6 +126,7 @@ def main():
     fx = os.path.join(work, "fixtures")
     meta = json.load(open(os.path.join(fx, "meta.json")))
     max_seq, prefill_len = meta["max_seq"], meta["prefill"]
+    rope_delta = int(meta.get("rope_deltas", 0))   # generated tokens sit at slot + rope_delta
 
     files = sorted(sum([glob.glob(p) for p in args.images], []))
     if len(files) != 16:
@@ -160,6 +161,14 @@ def main():
         if mode == "lazy" and name in eng:
             eng.pop(name).close()
 
+    def preload(name):
+        """Lazy mode reads each plan from disk every frame (prefill and decode are
+        15 GB each). Time that as its own stage so it never inflates a compute
+        number; in resident mode this is a no-op."""
+        if name not in eng:
+            with timer("engine load"):
+                get(name)
+
     gen = torch.Generator(device="cuda").manual_seed(args.seed)
     timer = Timer()
 
@@ -192,6 +201,7 @@ def main():
         vit_tok, llm_tok = preprocess.token_counts(grid_thw)
 
         # ---- 2. vision tower ----------------------------------------------
+        preload("vision")
         with timer("vision"):
             vout = get("vision")({"pixel_values": pixel_values})
         visual = vout["visual_embeds"]
@@ -208,24 +218,37 @@ def main():
                 ds_full.append(z)
 
         # ---- 4. prefill ----------------------------------------------------
+        preload("prefill")
         with timer("prefill"):
             pout = get("prefill")({"inputs_embeds": embeds, "cos": cos_p, "sin": sin_p,
                                    "deepstack0": ds_full[0], "deepstack1": ds_full[1],
                                    "deepstack2": ds_full[2]})
             past_k[:, :, :, :prefill_len].copy_(pout["k_cache"])
             past_v[:, :, :, :prefill_len].copy_(pout["v_cache"])
-            hidden = pout["last_hidden"].clone()
+            # The first generated token is predicted at the LAST PROMPT position, so it
+            # comes from prefill's logits. Decode only ever receives token embeddings.
+            first_logits = pout["logits"].clone()
         release("prefill")
 
         # ---- 5. chain-of-causation rollout ---------------------------------
+        # Each decode step feeds ONE token, writes that token's K,V into slot `pos`,
+        # and returns logits for the next. The stop token <traj_future_start> is fed
+        # through once too, so its K,V is in the cache -- the reference does the same
+        # (StopAfterEOS) and the expert attends to it. Generated tokens have no entry
+        # in the prompt's 3D position table; their position is slot + rope_delta on
+        # all three axes, as in Qwen3-VL's own decode path.
         pos = prefill_len
         tokens = []
         mask = torch.full((1, 1, 1, max_seq + 1), NEG_INF, dtype=torch.float16, device="cuda")
         if not args.no_reasoning:
+            preload("decode")
+            tok = sample(first_logits, args.temperature, args.top_p, gen)
+            tokens.append(tok)
             for _ in range(args.max_new_tokens):
                 mask[..., :pos] = 0.0
-                mask[..., max_seq] = 0.0                  # the token being generated
-                c, s = rope.tables(position_ids[:, pos:pos + 1])
+                mask[..., max_seq] = 0.0                  # the token being fed in
+                c, s = rope.tables(np.full((3, 1), pos + rope_delta, dtype=np.int64))
+                hidden = embed[tok].view(1, 1, -1).clone()
                 with timer("decode"):
                     d_eng = get("decode")
                     if mode == "lazy" and d_eng.inputs.get("past_k") is not past_k:
@@ -234,25 +257,25 @@ def main():
                         "hidden": hidden, "cos": c, "sin": s, "mask": mask})
                     past_k[:, :, :, pos:pos + 1].copy_(dout["new_k"])
                     past_v[:, :, :, pos:pos + 1].copy_(dout["new_v"])
-                    tok = sample(dout["logits"], args.temperature, args.top_p, gen)
                 pos += 1
-                tokens.append(tok)
-                if tok == TRAJ_FUTURE_START:
+                if tok == TRAJ_FUTURE_START:              # its K,V is now cached
                     break
-                hidden = embed[tok].view(1, 1, -1).clone()
+                tok = sample(dout["logits"], args.temperature, args.top_p, gen)
+                tokens.append(tok)
 
         # ---- 6. flow-matching action expert --------------------------------
         emask = torch.full((1, 1, N_WAYPOINTS, max_seq + N_WAYPOINTS), NEG_INF,
                            dtype=torch.float16, device="cuda")
         emask[..., :pos] = 0.0
         emask[..., max_seq:] = 0.0                        # expert tokens see each other
-        wpos = np.arange(N_WAYPOINTS) + pos + meta.get("rope_deltas", 0)
+        wpos = np.arange(N_WAYPOINTS) + pos + rope_delta   # reference: arange(64) + offset + rope_deltas
         wcos, wsin = rope.tables(np.broadcast_to(wpos, (3, N_WAYPOINTS)))
         wcos, wsin = torch.from_numpy(wcos).cuda(), torch.from_numpy(wsin).cuda()
 
         release("decode")
         x = torch.randn(1, N_WAYPOINTS, 2, dtype=torch.float16, device="cuda", generator=gen)
         ts = torch.linspace(0.0, 1.0, args.flow_steps + 1)
+        preload("expert")
         with timer("expert"):
             e_eng = get("expert")
             if mode == "lazy" and e_eng.inputs.get("past_k") is not past_k:
@@ -268,6 +291,10 @@ def main():
         xy, heading = postprocess.action_to_waypoints(x.float().cpu().numpy()[0])
 
         total = timer.report()
+        load_ms = sum(timer.stages.get("engine load", []))
+        if load_ms:
+            print("compute only              %10.1f ms  (TOTAL minus %.0f ms of engine loading)"
+                  % (total - load_ms, load_ms))
         print("\npreprocess (CPU)          %10.1f ms  [not in TOTAL]" % cpu_ms)
         print("reasoning tokens          %10d" % len(tokens))
         print("visual tokens             %10d  (%d ViT patches)" % (llm_tok, vit_tok))

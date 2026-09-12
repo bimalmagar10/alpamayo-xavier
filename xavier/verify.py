@@ -10,6 +10,7 @@ is the only thing that catches them.
     python verify.py --work /mnt/ssdhome/models/alpamayo --precision int8
 """
 import argparse
+import glob
 import json
 import os
 import sys
@@ -18,12 +19,12 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from alpamayo_xavier import rope                                    # noqa: E402
+from alpamayo_xavier import preprocess, rope                        # noqa: E402
 from alpamayo_xavier.trt_runner import load_engines                 # noqa: E402
 
 # Per-stage tolerance. Vision and prefill accumulate over 27 and 36 layers, so
 # they earn more slack; INT8 earns more again.
-TOL = {"visual_embeds": 2e-3, "prefill_hidden": 5e-3, "waypoints_m": 0.5}
+TOL = {"pixel_values": 1e-3, "visual_embeds": 2e-3, "prefill_hidden": 5e-3, "waypoints_m": 0.5}
 
 
 def compare(name, got, ref, tol):
@@ -44,44 +45,65 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--work", default=os.environ.get("ALPAMAYO_WORK",
                                                      "/mnt/ssdhome/models/alpamayo"))
-    ap.add_argument("--precision", default="int8", choices=["int8", "fp16"])
+    ap.add_argument("--precision", default="fp16", choices=["int8", "fp16"])
     args = ap.parse_args()
 
     g = np.load(os.path.join(args.work, "golden", "inputs.npz"), allow_pickle=True)
     a = np.load(os.path.join(args.work, "golden", "activations.npz"))
-    meta = json.load(open(os.path.join(args.work, "fixtures", "meta.json")))
-    prefill_len = meta["prefill"]
-    eng = load_engines(os.path.join(args.work, "engines"), args.precision,
-                       names=("vision", "prefill"))
-    passed = True
+    eng_dir = os.path.join(args.work, "engines")
+    # Engines are built one at a time, so check whatever exists and say what doesn't.
+    built = [n for n in ("vision", "prefill") if os.path.exists(
+        os.path.join(eng_dir, "%s.%s.plan" % (n, args.precision)))]
+    for n in ("vision", "prefill"):
+        if n not in built:
+            print("[--] %s.%s.plan not built yet -- that stage is skipped" % (n, args.precision))
+    eng = load_engines(eng_dir, args.precision, names=tuple(built))
+    passed = bool(built)
 
-    print("\n1. vision tower")
-    out = eng["vision"]({"pixel_values": g["pixel_values"]})
-    passed &= compare("visual_embeds", out["visual_embeds"].float().cpu().numpy(),
-                      a["visual"], TOL["visual_embeds"])
+    print("\n0. preprocessing (frames/*.png -> pixel_values, NumPy on this board)")
+    frames = sorted(glob.glob(os.path.join(args.work, "frames", "*.png")))
+    if frames:
+        from PIL import Image
+        px, _ = preprocess.preprocess_images(
+            [np.asarray(Image.open(f).convert("RGB")) for f in frames])
+        passed &= compare("pixel_values", px, g["pixel_values"], TOL["pixel_values"])
+    else:
+        print("  [--] no frames/*.png -- copy the frames/ that h100/a5_export_frames.py wrote")
 
-    print("\n2. prefill (fed the GOLDEN vision output, to isolate the backbone)")
-    fx = os.path.join(args.work, "fixtures")
-    embed = torch.from_numpy(np.load(os.path.join(fx, "embed_tokens.fp16.npy"))).cuda()
-    ids = torch.from_numpy(np.load(os.path.join(fx, "input_ids.npy"))).long().cuda()
-    vmask = torch.from_numpy(np.load(os.path.join(fx, "visual_mask.npy"))).cuda()
-    pos = np.load(os.path.join(fx, "position_ids.npy"))
+    if "vision" in eng:
+        print("\n1. vision tower")
+        out = eng["vision"]({"pixel_values": g["pixel_values"]})
+        passed &= compare("visual_embeds", out["visual_embeds"].float().cpu().numpy(),
+                          a["visual"], TOL["visual_embeds"])
 
-    embeds = embed[ids[:prefill_len]].unsqueeze(0).clone()
-    embeds[0, vmask[:prefill_len]] = torch.from_numpy(a["visual"]).cuda().half()
-    ds = []
-    for i in range(3):
-        z = torch.zeros_like(embeds)
-        z[0, vmask[:prefill_len]] = torch.from_numpy(a["deepstack%d" % i]).cuda().half()
-        ds.append(z)
-    cos_p, sin_p = rope.tables(pos[:, :prefill_len])
-    out = eng["prefill"]({"inputs_embeds": embeds,
-                          "cos": torch.from_numpy(cos_p).cuda(),
-                          "sin": torch.from_numpy(sin_p).cuda(),
-                          "deepstack0": ds[0], "deepstack1": ds[1], "deepstack2": ds[2]})
-    if "layer35" in a:
-        passed &= compare("prefill_hidden", out["last_hidden"].float().cpu().numpy(),
-                          a["layer35"][:, -1:], TOL["prefill_hidden"])
+    if "prefill" in eng:
+        print("\n2. prefill (fed the GOLDEN vision output, to isolate the backbone)")
+        meta = json.load(open(os.path.join(args.work, "fixtures", "meta.json")))
+        prefill_len = meta["prefill"]
+        fx = os.path.join(args.work, "fixtures")
+        embed = torch.from_numpy(np.load(os.path.join(fx, "embed_tokens.fp16.npy"))).cuda()
+        ids = torch.from_numpy(np.load(os.path.join(fx, "input_ids.npy"))).long().cuda()
+        vmask = torch.from_numpy(np.load(os.path.join(fx, "visual_mask.npy"))).cuda()
+        pos = np.load(os.path.join(fx, "position_ids.npy"))
+
+        embeds = embed[ids[:prefill_len]].unsqueeze(0).clone()
+        embeds[0, vmask[:prefill_len]] = torch.from_numpy(a["visual"]).cuda().half()
+        ds = []
+        for i in range(3):
+            z = torch.zeros_like(embeds)
+            z[0, vmask[:prefill_len]] = torch.from_numpy(a["deepstack%d" % i]).cuda().half()
+            ds.append(z)
+        cos_p, sin_p = rope.tables(pos[:, :prefill_len])
+        out = eng["prefill"]({"inputs_embeds": embeds,
+                              "cos": torch.from_numpy(cos_p).cuda(),
+                              "sin": torch.from_numpy(sin_p).cuda(),
+                              "deepstack0": ds[0], "deepstack1": ds[1], "deepstack2": ds[2]})
+        if "prefill_norm" in a.files:
+            passed &= compare("prefill_hidden", out["last_hidden"].float().cpu().numpy(),
+                              a["prefill_norm"][:, -1:], TOL["prefill_hidden"])
+        else:
+            print("  [--] golden has no prefill_norm -- re-run  a1_golden.py --clips 0  on the H100")
+            passed = False
 
     print("\n3. end-to-end waypoints")
     print("   Run run_alpamayo.py on the golden clip and compare its final xy against")

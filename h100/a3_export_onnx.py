@@ -165,12 +165,12 @@ def main():
         model.vlm.model.visual = None
         torch.cuda.empty_cache()
         print("exporting prefill")
-        mod = graphs.PrefillGraph(lm, prefill, dtype).cuda().eval()
+        mod = graphs.PrefillGraph(lm, model.vlm.lm_head, prefill, dtype).cuda().eval()
         inp = (zeros(1, prefill, 4096), cos, sin,
                zeros(1, prefill, 4096), zeros(1, prefill, 4096), zeros(1, prefill, 4096))
         export(mod, inp,
                ["inputs_embeds", "cos", "sin", "deepstack0", "deepstack1", "deepstack2"],
-               ["last_hidden", "k_cache", "v_cache"], out / "prefill.onnx")
+               ["last_hidden", "logits", "k_cache", "v_cache"], out / "prefill.onnx")
 
     if "decode" not in skip:
         print("exporting decode")

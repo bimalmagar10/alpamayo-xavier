@@ -45,11 +45,18 @@ LLM = dict(layers=36, dim=4096, mlp=12288, q_heads=32, kv_heads=8, head_dim=128)
 EXP = dict(layers=36, dim=2048, mlp=8256, q_heads=16, kv_heads=8, head_dim=128)
 VOCAB = 155697
 
-# Default workload: 4 cameras x 4 frames @ 320x576, temporal patch 2.
-#   720 patches per (16x16) frame-slot, 2 slots per camera, 4 cameras
-#   -> 5760 ViT tokens -> 2x2 merge -> 1440 LLM visual tokens
-DEF_VIT_SLOTS, DEF_VIT_TOK = 8, 720
-DEF_PREFILL = 1550          # 1440 visual + 48 history-traj + ~62 text
+# Default workload, CONFIRMED against the real processor output by
+# h100/a1b_h100_stages.py: helper.create_message flattens 4 cameras x 4 frames
+# into 16 INDEPENDENT images, each 320x576 -> a 20x36 grid -> 720 patches.
+#   16 images x 720            = 11,520 ViT tokens
+#   after the 2x2 spatial merge =  2,880 LLM visual tokens
+#   + 50-token history block + 76 chat/vision markers = 3,006 prefill tokens
+#
+# These were 8 and 1550 in an earlier revision, from a wrong assumption that the
+# 4 frames per camera were merged into 2 temporal slots. They are not. A vision
+# benchmark run with 8 slots measures HALF the real workload.
+DEF_VIT_SLOTS, DEF_VIT_TOK = 16, 720
+DEF_PREFILL = 3006
 DEF_WAYPOINTS = 64
 DEF_FLOW_STEPS = 10         # euler, dt=0.1
 
@@ -243,19 +250,29 @@ def stage_decode(a, dt, res):
     x = torch.randn(1, 1, LLM["dim"], device="cuda", dtype=dt) * 0.02
     pos = a.prefill
 
-    def step():
+    # The lm_head runs ONCE per token regardless of depth, so it must NOT be
+    # scaled with the layer count. Timing the stack and the head separately keeps
+    # a 4-layer extrapolation honest -- scaling both together inflated a 318 ms
+    # decode step to 437 ms, purely by counting the head nine times.
+    def step_layers():
         h = x
         for l, c in zip(layers, kv):
             h = l(h, cos, sin, pos=pos, kv=c)
-        return head(h)
+        return h
 
     torch.cuda.reset_peak_memory_stats()
     with torch.inference_mode():
-        p50, p95 = bench(step, a.warmup, a.iters, f"decode  {n}/{LLM['layers']} layers, ctx {pos}")
+        lp50, lp95 = bench(step_layers, a.warmup, a.iters,
+                           f"decode  {n}/{LLM['layers']} layers, ctx {pos}")
+        hidden = torch.randn(1, 1, LLM["dim"], device="cuda", dtype=dt) * 0.02
+        hp50, hp95 = bench(lambda: head(hidden), a.warmup, a.iters, "decode  lm_head (fixed)")
+
     scale = LLM["layers"] / n
-    tok = p50 * scale
-    res["decode"] = dict(per_token_ms=tok, p95_ms=p95 * scale, ctx=pos, layers_run=n,
-                         extrapolated=scale != 1.0, tokens_per_s=1000.0 / tok)
+    tok = lp50 * scale + hp50
+    res["decode"] = dict(per_token_ms=tok, p95_ms=lp95 * scale + hp95, ctx=pos,
+                         layers_run=n, extrapolated=scale != 1.0,
+                         layers_ms=lp50 * scale, lm_head_ms=hp50,
+                         tokens_per_s=1000.0 / tok)
     del layers, kv, head, x
     torch.cuda.empty_cache()
 
@@ -302,12 +319,14 @@ def main():
     p.add_argument("--vit-tokens", type=int, default=DEF_VIT_TOK)
     p.add_argument("--waypoints", type=int, default=DEF_WAYPOINTS)
     p.add_argument("--flow-steps", type=int, default=DEF_FLOW_STEPS)
-    p.add_argument("--gen-tokens", type=int, default=300, help="CoC + trajectory tokens to bill for")
+    p.add_argument("--gen-tokens", type=int, default=16,
+                   help="reasoning tokens to bill for; 16 is the measured p50")
     p.add_argument("--max-len", type=int, default=4096)
     p.add_argument("--with-head", action="store_true", help="include lm_head in prefill")
     p.add_argument("--warmup", type=int, default=10)
     p.add_argument("--iters", type=int, default=30)
-    p.add_argument("--sdp", default="mem_efficient", choices=["mem_efficient", "math", "auto"])
+    p.add_argument("--sdp", default="math", choices=["mem_efficient", "math", "auto"],
+                   help="sm_72 only has the math backend; the others fall back to it")
     p.add_argument("--json", default=None)
     a = p.parse_args()
 
@@ -317,7 +336,8 @@ def main():
     free, total = torch.cuda.mem_get_info()
     print(f"device {torch.cuda.get_device_name(0)}  sm_{cap[0]}{cap[1]}   "
           f"torch {torch.__version__}  cuda {torch.version.cuda}")
-    print(f"memory {free / 2**30:.1f} GiB free / {total / 2**30:.1f} GiB   dtype {a.dtype}   sdp {a.sdp}")
+    print(f"memory {free / 2**30:.1f} GiB free / {total / 2**30:.1f} GiB   dtype {a.dtype}   sdp {a.sdp}"
+          + ("  (falls back to math on this device)" if cap < (7, 5) and a.sdp != "math" else ""))
     if cap < (7, 5):
         print("note   sm_%d%d has no flash or mem-efficient SDPA kernel; attention runs\n"
               "       on the math backend and materialises the score matrix.\n" % cap)

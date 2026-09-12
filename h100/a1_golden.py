@@ -49,9 +49,13 @@ class Tap:
         self.store, self._handles = {}, []
 
     def watch(self, name, module, pick=lambda o: o):
-        self._handles.append(
-            module.register_forward_hook(lambda _m, _i, o: self.store.__setitem__(name, pick(o)))
-        )
+        # generate() calls every module once for the whole prompt, then once per new
+        # token. Only the FIRST call is the prefill we compare against; without this
+        # guard the last decode step overwrites it.
+        def hook(_m, _i, o):
+            if name not in self.store:
+                self.store[name] = pick(o)
+        self._handles.append(module.register_forward_hook(hook))
 
     def close(self):
         for h in self._handles:
@@ -132,6 +136,7 @@ def main():
     tap.watch("deepstack", model.vlm.model.visual, lambda o: o[1] if isinstance(o, tuple) else None)
     for i in CAPTURE_LAYERS:
         tap.watch(f"layer{i}", lm.layers[i], lambda o: o[0] if isinstance(o, tuple) else o)
+    tap.watch("prefill_norm", lm.norm)          # what prefill.onnx's last_hidden must match
 
     torch.cuda.manual_seed_all(42)
     with torch.autocast("cuda", dtype=torch.bfloat16):

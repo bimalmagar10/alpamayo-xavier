@@ -22,6 +22,7 @@ LLM = dict(
     rope_theta=5_000_000.0,
     mrope_section=(24, 20, 20),      # sums to head_dim // 2
     mrope_interleaved=True,
+    deepstack_layers=(0, 1, 2),      # decoder layers the 3 DeepStack maps are added after
 )
 
 # --- Qwen3-VL vision tower ------------------------------------------------
@@ -36,7 +37,7 @@ VISION = dict(
     spatial_merge_size=2,
     num_position_embeddings=2304,    # 48 x 48, bicubically resampled per grid
     out_hidden=4096,
-    deepstack_indexes=(8, 16, 24),   # LLM layers that receive DeepStack features
+    deepstack_indexes=(8, 16, 24),   # ViT blocks whose outputs feed the 3 DeepStack mergers
 )
 
 # --- Alpamayo action expert (Qwen3 text block, narrower) ------------------

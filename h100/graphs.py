@@ -9,7 +9,7 @@ Design rules, all driven by what TensorRT 8.5.2 on sm_72 can actually consume:
    TRT 8.5 will not fuse. Passing cos/sin in as plain tensors costs 1.5 MB per
    prefill and removes the whole problem.
 3. **DeepStack injection arrives pre-scattered.** The reference code writes vision
-   features into hidden states at visual-token positions after layers 8/16/24.
+   features into hidden states at visual-token positions after decoder layers 0, 1 and 2.
    The host builds a full-length additive tensor that is zero elsewhere, turning
    a scatter into an Add.
 4. **Decode emits only its own KV slice.** TensorRT 8.5 cannot alias an input
@@ -183,17 +183,23 @@ class VisionGraph(nn.Module):
 # graph 2 -- prefill: 36 layers over the full prompt, emitting the KV cache
 # --------------------------------------------------------------------------
 class PrefillGraph(nn.Module):
-    def __init__(self, language_model, seq_len: int, dtype=torch.float16):
+    def __init__(self, language_model, lm_head, seq_len: int, dtype=torch.float16):
         super().__init__()
-        self.lm, self.seq, self.dtype = language_model, seq_len, dtype
+        self.lm, self.lm_head, self.seq, self.dtype = language_model, lm_head, seq_len, dtype
         self.cfg = arch.LLM
-        self.deepstack_at = arch.VISION["deepstack_indexes"]
+        # Qwen3-VL adds the three DeepStack maps after the FIRST THREE decoder layers
+        # (`layer_idx in range(len(deepstack_visual_embeds))`, transformers 4.57.1).
+        # ViT blocks 8/16/24 are where the maps are TAKEN from -- a different list.
+        self.deepstack_at = arch.LLM["deepstack_layers"]
         self.register_buffer("mask", causal_mask(seq_len, dtype), persistent=False)
 
     def forward(self, inputs_embeds, cos, sin, ds0, ds1, ds2):
-        """inputs_embeds [1, S, 4096]; ds* [1, S, 4096], zero off visual positions."""
-        deepstack = {self.deepstack_at[0]: ds0, self.deepstack_at[1]: ds1,
-                     self.deepstack_at[2]: ds2}
+        """inputs_embeds [1, S, 4096]; ds* [1, S, 4096], zero off visual positions.
+
+        Returns the last position's normed hidden state (for verification), the
+        logits that predict the FIRST generated token, and every layer's K/V.
+        """
+        deepstack = dict(zip(self.deepstack_at, (ds0, ds1, ds2)))
         h = inputs_embeds
         ks, vs = [], []
         for i, layer in enumerate(self.lm.layers):
@@ -203,7 +209,8 @@ class PrefillGraph(nn.Module):
             ks.append(k)
             vs.append(v)
         h = rms_norm(h, self.lm.norm.weight, self.cfg["rms_eps"])
-        return h[:, -1:], torch.stack(ks), torch.stack(vs)
+        last = h[:, -1:]
+        return last, self.lm_head(last), torch.stack(ks), torch.stack(vs)
 
 
 # --------------------------------------------------------------------------
