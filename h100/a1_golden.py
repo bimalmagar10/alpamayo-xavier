@@ -108,11 +108,21 @@ def main():
     if not os.path.isdir(args.model):
         raise SystemExit("checkpoint not found: %s\n"
                          "Set ALPAMAYO_MODEL or pass --model." % args.model)
-    print("loading %s" % args.model)
-    model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16).to("cuda")
+    t_start = time.time()
+
+    def step(msg):
+        print("[%5.0fs] %s" % (time.time() - t_start, msg), flush=True)
+
+    step("loading %s" % args.model)
+    model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16)
+    step("moving the weights to the GPU (reads 22 GB from disk; can take minutes)")
+    model = model.to("cuda")
     model.eval()
+    step("loading the Qwen3-VL processor")
     processor = helper.get_processor(model.tokenizer)
+    step("streaming clip %s from huggingface.co (needs network)" % args.clip)
     data, model_inputs = build_inputs(model, processor, args.clip, args.t0_us)
+    step("inputs ready")
 
     # ---- 1. golden inputs -------------------------------------------------
     tok = model_inputs["tokenized_data"]
@@ -130,6 +140,7 @@ def main():
           f"grid {tok['image_grid_thw'].tolist()}  prefill ~{n_prefill} tokens")
 
     # ---- 2. golden activations -------------------------------------------
+    step("golden rollout with activation hooks")
     tap = Tap()
     lm = model.vlm.model.language_model
     tap.watch("visual", model.vlm.model.visual, lambda o: o[0] if isinstance(o, tuple) else o)
@@ -159,6 +170,7 @@ def main():
     print(f"[golden] CoC trace:\n{extra['cot'][0]}\n")
 
     # ---- 3. trace-length statistics --------------------------------------
+    step("trace statistics over %d samples (each one streams its own frames)" % args.clips)
     lengths = []
     for i in range(args.clips):
         try:

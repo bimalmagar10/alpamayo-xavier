@@ -14,13 +14,25 @@ alpamayo_check_paths || exit 1
 
 # The prefill export only fits on one 80 GB H100 without allocator fragmentation.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-# Everything is cached by setup_h100.sh and a0_prefetch.py on the login node.
-export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+# Print as it happens: through `| tee`, Python otherwise holds output back in a
+# buffer and a working job looks frozen.
+export PYTHONUNBUFFERED=1
 
 KEEP_GOLDEN=0
 [ "${1:-}" = "--keep-golden" ] && KEEP_GOLDEN=1
 
 step() { echo; echo "=============== $* ==============="; }
+
+step "preflight  network"
+# a1, a3b and a5 read the driving clip through physical_ai_av, which STREAMS the
+# camera video from huggingface.co on every run -- only small metadata is cached.
+# Without a route out, those steps sit in network timeouts and look hung.
+if ! python -c "import socket; socket.create_connection(('huggingface.co', 443), timeout=10).close()"; then
+  echo "No route to huggingface.co from $(hostname)." >&2
+  echo "Allocate a compute node with internet access (rpg-93-5 worked before) and rerun." >&2
+  exit 1
+fi
+echo "huggingface.co reachable from $(hostname)"
 
 step "0  clearing derived artefacts"
 # The checkpoint at $ALPAMAYO_MODEL is never touched.

@@ -29,9 +29,10 @@ set -euo pipefail
 source /mnt/DISCL/work/bthapama/alpamayo-xavier/env.sh
 source "$ALPAMAYO_ROOT/alpamayo/ar1_venv/bin/activate"
 
-# Everything the job needs was cached on the login node by setup_h100.sh and
-# a0_prefetch.py, so refuse to reach the network and fail fast if something is missing.
-export HF_HUB_OFFLINE=1
+# physical_ai_av streams the clip's camera video from huggingface.co on every
+# run (only metadata is cached), so this node needs network access and
+# offline mode must stay off.
+export HF_HUB_OFFLINE=0
 
 # --- preflight -----------------------------------------------------------
 # Cheap, and it turns "the job died after 40 minutes" into "the job died in 20

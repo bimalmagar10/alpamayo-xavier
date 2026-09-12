@@ -41,8 +41,8 @@ def check_network(host="huggingface.co", port=443, timeout=10):
             "Cannot reach %s:%d (%s).\n\n"
             "  This node has no route to the internet, so the clips cannot be streamed.\n"
             "  Run this script on a LOGIN or DATA-TRANSFER node instead -- it needs no\n"
-            "  GPU. Once the cache under HF_HOME is warm, a1_golden.py runs fine here\n"
-            "  with HF_HUB_OFFLINE=1, because HF_HOME is on shared scratch.\n"
+            "  GPU. Note that a1_golden.py streams the same video, so it also needs a\n"
+            "  compute node with network access.\n"
             % (host, port, exc))
     print("network : %s reachable" % host)
 
@@ -141,8 +141,10 @@ def main():
         sys.exit("\nNothing cached. The network and auth checks passed, so this is most\n"
                  "likely a bad --clip id or a t0 outside the clip. Try --clips 1 first.")
 
-    print("\nNow safe to run a1_golden.py on a compute node with HF_HUB_OFFLINE=1.")
-    print("Use --clips %d there to stay inside what is cached." % ok)
+    print("\nThe clip is readable: %d samples. physical_ai_av caches only the dataset" % ok)
+    print("metadata and streams the camera video on every run, so a1_golden.py,")
+    print("a3b_fixtures.py and a5_export_frames.py need network access on the compute")
+    print("node too. Keep HF_HUB_OFFLINE=0, and use --clips %d for a1." % ok)
 
 
 if __name__ == "__main__":

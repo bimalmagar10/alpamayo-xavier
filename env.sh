@@ -20,7 +20,7 @@ export ALPAMAYO_ROOT="${ALPAMAYO_ROOT:-/mnt/SHARED-SCRATCH/bthapama/alpamayo-wor
 # so this must point somewhere shared and pre-populated -- compute nodes usually
 # have no route to huggingface.co.
 export HF_HOME="${HF_HOME:-/mnt/SHARED-SCRATCH/bthapama/hf-cache}"
-export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"   # set 1 on compute nodes once cached
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"   # keep 0: the dataset streams camera video
 
 # --- Jetson AGX Xavier side ----------------------------------------------
 # Used by xavier/*.sh and xavier/run_alpamayo.py on the device itself.
