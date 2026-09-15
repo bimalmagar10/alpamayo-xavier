@@ -10,6 +10,7 @@ is the only thing that catches them.
     python verify.py --work /mnt/ssdhome/models/alpamayo --precision int8
 """
 import argparse
+import gc
 import glob
 import json
 import os
@@ -19,12 +20,16 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from alpamayo_xavier import preprocess, rope                        # noqa: E402
-from alpamayo_xavier.trt_runner import load_engines                 # noqa: E402
+from alpamayo_xavier import pieces as piecelib                      # noqa: E402
+from alpamayo_xavier import preprocess, refdata, rope               # noqa: E402
+from alpamayo_xavier.trt_runner import SCRATCH, Engine              # noqa: E402
 
 # Per-stage tolerance. Vision and prefill accumulate over 27 and 36 layers, so
 # they earn more slack; INT8 earns more again.
-TOL = {"pixel_values": 1e-3, "visual_embeds": 2e-3, "prefill_hidden": 5e-3, "waypoints_m": 0.5}
+LAYERS, KV_HEADS, HEAD_DIM = 36, 8, 128
+NEG_INF = -65504.0
+TOL = {"pixel_values": 1e-3, "visual_embeds": 2e-3, "expert_velocity": 2e-3,
+       "decode_logits": 2e-3, "decode_new_kv": 2e-3, "prefill_hidden": 5e-3, "waypoints_m": 0.5}
 
 
 def compare(name, got, ref, tol):
@@ -46,72 +51,188 @@ def main():
     ap.add_argument("--work", default=os.environ.get("ALPAMAYO_WORK",
                                                      "/mnt/ssdhome/models/alpamayo"))
     ap.add_argument("--precision", default="fp16", choices=["int8", "fp16"])
+    ap.add_argument("--decode", default="auto", choices=["auto", "trt", "torch"])
     args = ap.parse_args()
+    work = args.work
 
-    g = np.load(os.path.join(args.work, "golden", "inputs.npz"), allow_pickle=True)
-    a = np.load(os.path.join(args.work, "golden", "activations.npz"))
-    eng_dir = os.path.join(args.work, "engines")
-    # Engines are built one at a time, so check whatever exists and say what doesn't.
-    built = [n for n in ("vision", "prefill") if os.path.exists(
-        os.path.join(eng_dir, "%s.%s.plan" % (n, args.precision)))]
-    for n in ("vision", "prefill"):
-        if n not in built:
-            print("[--] %s.%s.plan not built yet -- that stage is skipped" % (n, args.precision))
-    eng = load_engines(eng_dir, args.precision, names=tuple(built))
-    passed = bool(built)
+    g = np.load(os.path.join(work, "golden", "inputs.npz"), allow_pickle=True)
+    a = np.load(os.path.join(work, "golden", "activations.npz"))
+    eng_dir = os.path.join(work, "engines")
+    graphs = piecelib.load(eng_dir) or piecelib.load(os.path.join(work, "onnx"))
+    refs = os.path.join(work, "refs")
+    results = []                          # (stage, True/False); skipped stages are absent
+
+    def plan(name):
+        return os.path.join(eng_dir, "%s.%s.plan" % (name, args.precision))
+
+    def stage(name):
+        """A stage over its engines -- one, or the pieces a3d split it into -- or None
+        if any are not built yet. One stage at a time: prefill and decode are 15 GB."""
+        specs = piecelib.specs(graphs, name)
+        missing = [p["name"] for p in specs if not os.path.exists(plan(p["name"]))]
+        if missing:
+            print("  [--] %d of %d %s engine(s) not built yet (e.g. %s) -- skipped"
+                  % (len(missing), len(specs), name, missing[0]))
+            return None
+        # One engine at a time. A verify pass runs each piece once, and holding all 13
+        # prefill engines at once left the board too fragmented to load decode after.
+        st = piecelib.Stage(name, specs, lambda p, skip=(): Engine(plan(p), skip=skip),
+                            sequential=True)
+        print("  %d engine(s), loaded one at a time · %.1f GB free"
+              % (len(specs), torch.cuda.mem_get_info()[0] / 1e9))
+        return st
+
+    def decode_stage():
+        """PyTorch decode when the weight map is there, else the engines."""
+        want_torch = args.decode == "torch" or (
+            args.decode == "auto" and any(os.path.exists(os.path.join(work, d, "weight_map.json"))
+                                          for d in ("engines", "onnx")))
+        if not want_torch:
+            return stage("decode")
+        from alpamayo_xavier.torch_decode import TorchDecode
+        td = TorchDecode(work)
+        print("  PyTorch decode, weights from %s.onnx.data" % td.graph)
+        return td
 
     print("\n0. preprocessing (frames/*.png -> pixel_values, NumPy on this board)")
-    frames = sorted(glob.glob(os.path.join(args.work, "frames", "*.png")))
+    frames = sorted(glob.glob(os.path.join(work, "frames", "*.png")))
     if frames:
         from PIL import Image
         px, _ = preprocess.preprocess_images(
             [np.asarray(Image.open(f).convert("RGB")) for f in frames])
-        passed &= compare("pixel_values", px, g["pixel_values"], TOL["pixel_values"])
+        results.append(("preprocessing", compare("pixel_values", px, g["pixel_values"],
+                                                 TOL["pixel_values"])))
     else:
         print("  [--] no frames/*.png -- copy the frames/ that h100/a5_export_frames.py wrote")
 
-    if "vision" in eng:
-        print("\n1. vision tower")
-        out = eng["vision"]({"pixel_values": g["pixel_values"]})
-        passed &= compare("visual_embeds", out["visual_embeds"].float().cpu().numpy(),
-                          a["visual"], TOL["visual_embeds"])
+    print("\n1. vision tower (vs the H100 golden output)")
+    st = stage("vision")
+    if st:
+        out, _ = st.run({"pixel_values": g["pixel_values"]})
+        results.append(("vision", compare("visual_embeds", out["visual_embeds"].float().cpu().numpy(),
+                                          a["visual"], TOL["visual_embeds"])))
+        st.close()
+        gc.collect()
+        print("  released · scratch %.2f GB · %.1f GB free"
+              % (SCRATCH.size / 1e9, torch.cuda.mem_get_info()[0] / 1e9))
 
-    if "prefill" in eng:
-        print("\n2. prefill (fed the GOLDEN vision output, to isolate the backbone)")
-        meta = json.load(open(os.path.join(args.work, "fixtures", "meta.json")))
-        prefill_len = meta["prefill"]
-        fx = os.path.join(args.work, "fixtures")
-        embed = torch.from_numpy(np.load(os.path.join(fx, "embed_tokens.fp16.npy"))).cuda()
-        ids = torch.from_numpy(np.load(os.path.join(fx, "input_ids.npy"))).long().cuda()
+    print("\n2. prefill (fed the GOLDEN vision output, to isolate the backbone)")
+    ps = None                             # what the decode check reuses
+    st = stage("prefill")
+    if st:
+        meta = json.load(open(os.path.join(work, "fixtures", "meta.json")))
+        S, max_seq = meta["prefill"], meta["max_seq"]
+        fx = os.path.join(work, "fixtures")
+        embed = np.load(os.path.join(fx, "embed_tokens.fp16.npy"), mmap_mode="r")   # 1.28 GB
+        ids = np.load(os.path.join(fx, "input_ids.npy"))
         vmask = torch.from_numpy(np.load(os.path.join(fx, "visual_mask.npy"))).cuda()
         pos = np.load(os.path.join(fx, "position_ids.npy"))
-
-        embeds = embed[ids[:prefill_len]].unsqueeze(0).clone()
-        embeds[0, vmask[:prefill_len]] = torch.from_numpy(a["visual"]).cuda().half()
+        embeds = torch.from_numpy(np.ascontiguousarray(embed[ids[:S]])).unsqueeze(0).cuda()
+        embeds[0, vmask[:S]] = torch.from_numpy(a["visual"]).cuda().half()
         ds = []
         for i in range(3):
             z = torch.zeros_like(embeds)
-            z[0, vmask[:prefill_len]] = torch.from_numpy(a["deepstack%d" % i]).cuda().half()
+            z[0, vmask[:S]] = torch.from_numpy(a["deepstack%d" % i]).cuda().half()
             ds.append(z)
-        cos_p, sin_p = rope.tables(pos[:, :prefill_len])
-        out = eng["prefill"]({"inputs_embeds": embeds,
-                              "cos": torch.from_numpy(cos_p).cuda(),
-                              "sin": torch.from_numpy(sin_p).cuda(),
-                              "deepstack0": ds[0], "deepstack1": ds[1], "deepstack2": ds[2]})
+        cos_p, sin_p = rope.tables(pos[:, :S])
+        out, kv = st.run({"inputs_embeds": embeds, "cos": cos_p, "sin": sin_p,
+                          "deepstack0": ds[0], "deepstack1": ds[1], "deepstack2": ds[2]})
         if "prefill_norm" in a.files:
-            passed &= compare("prefill_hidden", out["last_hidden"].float().cpu().numpy(),
-                              a["prefill_norm"][:, -1:], TOL["prefill_hidden"])
+            results.append(("prefill", compare("prefill_hidden", out["last_hidden"].float().cpu().numpy(),
+                                               a["prefill_norm"][:, -1:], TOL["prefill_hidden"])))
         else:
             print("  [--] golden has no prefill_norm -- re-run  a1_golden.py --clips 0  on the H100")
-            passed = False
+            results.append(("prefill", False))
+        # keep what decode needs: the cache of the first S-1 tokens, and token S-1
+        t = S - 1
+        past_k = torch.zeros(LAYERS, 1, KV_HEADS, max_seq, HEAD_DIM, dtype=torch.float16, device="cuda")
+        past_v = torch.zeros_like(past_k)
+        k_t, v_t = [], []
+        for a_, b_, k, v in kv:
+            past_k[a_:b_ + 1, :, :, :t].copy_(k[:, :, :, :t])
+            past_v[a_:b_ + 1, :, :, :t].copy_(v[:, :, :, :t])
+            k_t.append(k[:, :, :, t:t + 1].float().cpu().numpy())
+            v_t.append(v[:, :, :, t:t + 1].float().cpu().numpy())
+        ps = dict(t=t, max_seq=max_seq, pos=pos, past_k=past_k, past_v=past_v,
+                  k_t=np.concatenate(k_t), v_t=np.concatenate(v_t),
+                  logits=out["logits"].float().reshape(-1).cpu().numpy(),
+                  hidden=embeds[:, t:t + 1].clone())
+        del embeds, ds, kv
+        st.close()
+        gc.collect()
+        print("  released · scratch %.2f GB · %.1f GB free"
+              % (SCRATCH.size / 1e9, torch.cuda.mem_get_info()[0] / 1e9))
 
-    print("\n3. end-to-end waypoints")
+    print("\n2b. decode (the last prompt token again, against prefill's cache of the others)")
+    if ps is None:
+        print("  [--] needs the prefill engines -- skipped")
+    else:
+        st = decode_stage()
+        if st:
+            t, max_seq = ps["t"], ps["max_seq"]
+            mask = torch.full((1, 1, 1, max_seq + 1), NEG_INF, dtype=torch.float16, device="cuda")
+            mask[..., :t] = 0.0
+            mask[..., max_seq] = 0.0
+            c1, s1 = rope.tables(ps["pos"][:, t:t + 1])
+            st.bind_kv(ps["past_k"], ps["past_v"])
+            out, dkv = st.run({"hidden": ps["hidden"], "cos": c1, "sin": s1, "mask": mask})
+            logits = out["logits"].float().reshape(-1).cpu().numpy()
+            ok = compare("decode_vs_prefill", logits, ps["logits"], TOL["decode_logits"])
+            same = int(logits.argmax()) == int(ps["logits"].argmax())
+            print("  [%s] next token             decode %d, prefill %d"
+                  % ("ok " if same else "BAD", int(logits.argmax()), int(ps["logits"].argmax())))
+            k_d = np.concatenate([k.float().cpu().numpy() for _, _, k, _ in dkv])
+            v_d = np.concatenate([v.float().cpu().numpy() for _, _, _, v in dkv])
+            ok &= compare("decode_new_kv", np.concatenate([k_d.ravel(), v_d.ravel()]),
+                          np.concatenate([ps["k_t"].ravel(), ps["v_t"].ravel()]), TOL["decode_new_kv"])
+            ref_path = os.path.join(refs, "decode_ref.npz")
+            if os.path.exists(ref_path):
+                ok &= compare("decode_vs_fp32_ref", logits, np.load(ref_path)["decode_logits"],
+                              TOL["decode_logits"])
+            else:
+                print("  [--] no refs/decode_ref.npz -- run h100/a6_reference_io.py and copy refs/")
+            results.append(("decode", bool(ok and same)))
+            st.close()
+            gc.collect()
+            print("  released · scratch %.2f GB · %.1f GB free"
+                  % (SCRATCH.size / 1e9, torch.cuda.mem_get_info()[0] / 1e9))
+
+    print("\n3. action expert (fixed inputs vs an fp32 ONNX Runtime run of the same graph)")
+    ref_path = os.path.join(refs, "expert_ref.npz")
+    if not os.path.exists(ref_path):
+        print("  [--] no refs/expert_ref.npz -- run h100/a6_reference_io.py and copy refs/")
+    else:
+        st = stage("expert")
+        if st:
+            r = np.load(ref_path)
+            k, v = refdata.kv_cache(int(r["seed"]), tuple(int(x) for x in r["kv_shape"]))
+            if refdata.checksum(k, v) != str(r["kv_sha256"]):
+                print("  [BAD] the regenerated KV cache differs from the reference machine's")
+                results.append(("expert", False))
+            else:
+                pk, pv = torch.from_numpy(k).cuda(), torch.from_numpy(v).cuda()
+                del k, v
+                st.bind_kv(pk, pv)
+                out, _ = st.run({n: r[n] for n in ("noisy_action", "timestep", "cos", "sin", "mask")})
+                results.append(("expert", compare("expert_velocity",
+                                                  out["velocity"].float().cpu().numpy(),
+                                                  r["velocity"], TOL["expert_velocity"])))
+                del pk, pv
+            st.close()
+            gc.collect()
+            print("  released · scratch %.2f GB · %.1f GB free"
+                  % (SCRATCH.size / 1e9, torch.cuda.mem_get_info()[0] / 1e9))
+
+    print("\n4. end-to-end waypoints")
     print("   Run run_alpamayo.py on the golden clip and compare its final xy against")
     print("   activations.npz['pred_xyz']. Trajectory sampling is stochastic, so judge")
     print("   this on minADE across several seeds, not on a single trajectory.")
 
-    print("\n%s" % ("ALL STAGES PASS" if passed else
-                    "MISMATCH -- do not report latency for a model that computes the wrong thing"))
+    passed = bool(results) and all(ok for _, ok in results)
+    print("\nchecked: %s" % (", ".join("%s %s" % (s, "ok" if ok else "BAD") for s, ok in results)
+                             or "nothing"))
+    print("%s" % ("ALL CHECKED STAGES PASS" if passed else
+                  "MISMATCH -- do not report latency for a model that computes the wrong thing"))
     return 0 if passed else 1
 
 

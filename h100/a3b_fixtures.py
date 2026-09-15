@@ -10,8 +10,8 @@ processor, neither of which exists for Python 3.8 on JetPack 5:
   visual_mask.npy         [S]   bool, True where a visual token sits
   meta.json               prefill length, rope_deltas, max_seq
 
-They are deterministic for a fixed camera rig and prompt, so they are computed
-once here and shipped alongside the ONNX.
+The embedding table is shared. Prompt IDs, position IDs and initial speed belong
+to a particular clip and timestamp and must be regenerated for new inputs.
 
     python h100/a3b_fixtures.py
 """
@@ -33,19 +33,8 @@ DEFAULT_CLIP = "030c760c-ae38-49aa-9ad8-f5650a545d26"
 IMAGE_TOKEN_ID = 151655
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=MODEL_DIR)
-    ap.add_argument("--clip", default=DEFAULT_CLIP)
-    ap.add_argument("--t0-us", type=int, default=5_100_000)
-    ap.add_argument("--out", default=os.path.join(WORK_ROOT, "fixtures"))
-    ap.add_argument("--max-seq", type=int, default=3584)
-    args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
-
-    model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16).eval()
-    processor = helper.get_processor(model.tokenizer)
-    data = load_physical_aiavdataset(args.clip, t0_us=args.t0_us)
+def prepare_inputs(model, processor, data, clip, t0_us, max_seq):
+    """Build sample-specific prompt/history/position inputs without model inference."""
     messages = helper.create_message(data["image_frames"].flatten(0, 1))
     tok = processor.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False,
@@ -71,21 +60,56 @@ def main():
     print("position_ids    :", pos.shape, " rope_deltas:", rope_deltas)
     print("  t/h/w ranges  :", [(int(pos[i].min()), int(pos[i].max())) for i in range(3)])
 
+    # The expert outputs acceleration and curvature; postprocess.py integrates them
+    # from the speed at t=0, which the reference estimates by a least-squares fit
+    # over the ego history. Compute it here, with the reference's own code.
+    t0 = model.action_space.estimate_t0_states(data["ego_history_xyz"], data["ego_history_rot"])
+    v0 = float(np.asarray(t0["v"].detach().cpu()).reshape(-1)[-1])
+    print("ego speed v0    : %.3f m/s" % v0)
+
     visual_mask = (fused[0] == IMAGE_TOKEN_ID).cpu().numpy()
     print("visual tokens   :", int(visual_mask.sum()), " (expected 2880)")
 
+    arrays = dict(input_ids=fused[0].cpu().numpy().astype(np.int64), position_ids=pos,
+                  visual_mask=visual_mask, image_grid_thw=tok["image_grid_thw"].cpu().numpy())
+    meta = dict(prefill=n, max_seq=max_seq, rope_deltas=rope_deltas, v0=v0,
+                visual_tokens=int(visual_mask.sum()),
+                vocab=int(model.vlm.model.language_model.embed_tokens.weight.shape[0]),
+                image_token_id=IMAGE_TOKEN_ID, clip=clip, t0_us=int(t0_us))
+    return arrays, meta, tok
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default=MODEL_DIR)
+    ap.add_argument("--clip", default=DEFAULT_CLIP)
+    ap.add_argument("--t0-us", type=int, default=5_100_000)
+    ap.add_argument("--out", default=os.path.join(WORK_ROOT, "fixtures"))
+    ap.add_argument("--max-seq", type=int, default=3584)
+    args = ap.parse_args()
+    os.makedirs(args.out, exist_ok=True)
+
+    model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16).eval()
+    processor = helper.get_processor(model.tokenizer)
+    data = load_physical_aiavdataset(args.clip, t0_us=args.t0_us)
+    arrays, meta, tok = prepare_inputs(model, processor, data, args.clip, args.t0_us, args.max_seq)
+    n = meta["prefill"]
     embed = model.vlm.model.language_model.embed_tokens.weight
     embed = embed.detach().to(torch.float16).cpu().numpy()
     print("embed_tokens    :", embed.shape, "%.2f GB" % (embed.nbytes / 1e9))
 
-    np.save(os.path.join(args.out, "input_ids.npy"), fused[0].cpu().numpy().astype(np.int64))
-    np.save(os.path.join(args.out, "position_ids.npy"), pos)
-    np.save(os.path.join(args.out, "visual_mask.npy"), visual_mask)
+    for name, value in arrays.items():
+        np.save(os.path.join(args.out, name + ".npy"), value)
     np.save(os.path.join(args.out, "embed_tokens.fp16.npy"), embed)
-    meta = dict(prefill=n, max_seq=args.max_seq, rope_deltas=rope_deltas,
-                visual_tokens=int(visual_mask.sum()), vocab=int(embed.shape[0]),
-                image_token_id=IMAGE_TOKEN_ID, clip=args.clip)
     json.dump(meta, open(os.path.join(args.out, "meta.json"), "w"), indent=2)
+    # Export the actual runtime tokenizer, including Alpamayo's added tokens.
+    from a8_token_strings import bytes_to_unicode, encode_literal, write_vocab
+    table = bytes_to_unicode()
+    token_strings = {i: tok for tok, i in model.tokenizer.get_vocab().items()}
+    for i, token in model.tokenizer.added_tokens_decoder.items():
+        token_strings[i] = encode_literal(str(token), table)
+    write_vocab(token_strings, os.path.join(args.out, "vocab.json"), "model.tokenizer",
+                size=int(embed.shape[0]))
 
     print("\nwrote fixtures to", args.out)
     print(json.dumps(meta, indent=2))

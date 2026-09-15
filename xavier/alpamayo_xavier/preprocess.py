@@ -83,12 +83,10 @@ def preprocess_images(images):
     """
     if not images:
         raise ValueError("no images given")
-    first = images[0]
-    h, w = (first.shape[:2] if isinstance(first, np.ndarray) else (first.height, first.width))
-    size = smart_resize(h, w)
-
     all_patches, grids = [], []
     for img in images:
+        h, w = (img.shape[:2] if isinstance(img, np.ndarray) else (img.height, img.width))
+        size = smart_resize(h, w)
         chw = _to_chw_float(img, size)[None]                 # [1, C, H, W]
         patches, grid = patchify(chw)
         all_patches.append(patches)

@@ -22,5 +22,10 @@ echo "verify the files that matter:"
 ssh "$USER_@$HOST" "cd $DEST && md5sum bench/alpamayo_stage_bench.py xavier/run_alpamayo.py \
     xavier/alpamayo_xavier/trt_runner.py"
 echo "local:"
-( cd "$SRC" && md5sum bench/alpamayo_stage_bench.py xavier/run_alpamayo.py \
-    xavier/alpamayo_xavier/trt_runner.py )
+if command -v md5sum >/dev/null; then
+  ( cd "$SRC" && md5sum bench/alpamayo_stage_bench.py xavier/run_alpamayo.py \
+      xavier/alpamayo_xavier/trt_runner.py )
+else
+  ( cd "$SRC" && md5 bench/alpamayo_stage_bench.py xavier/run_alpamayo.py \
+      xavier/alpamayo_xavier/trt_runner.py )
+fi

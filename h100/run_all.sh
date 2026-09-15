@@ -36,7 +36,7 @@ echo "huggingface.co reachable from $(hostname)"
 
 step "0  clearing derived artefacts"
 # The checkpoint at $ALPAMAYO_MODEL is never touched.
-rm -rf "$ALPAMAYO_ROOT/onnx" "$ALPAMAYO_ROOT/fixtures" "$ALPAMAYO_ROOT/frames" \
+rm -rf "$ALPAMAYO_ROOT/onnx" "$ALPAMAYO_ROOT/fixtures" "$ALPAMAYO_ROOT/frames" "$ALPAMAYO_ROOT/refs" \
        "$ALPAMAYO_ROOT/ckpt/alpamayo-fp16"
 [ "$KEEP_GOLDEN" = 0 ] && rm -rf "$ALPAMAYO_ROOT/golden"
 mkdir -p "$ALPAMAYO_ROOT"/{onnx,fixtures,golden,frames,logs}
@@ -64,29 +64,35 @@ python "$ALPAMAYO_REPO/h100/a3_export_onnx.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a
 step "3a make the graphs readable by TensorRT 8.5 (LayerNormalization -> primitives)"
 python "$ALPAMAYO_REPO/h100/a3c_decompose_layernorm.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a3c.log"
 
+step "3d split expert/decode/prefill into engines TensorRT can build on 32 GB"
+python "$ALPAMAYO_REPO/h100/a3d_split_graphs.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a3d.log"
+
 step "3b fixtures for the Jetson"
 python "$ALPAMAYO_REPO/h100/a3b_fixtures.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a3b.log"
 
 step "3c the golden clip's camera frames, for run_alpamayo.py on the Jetson"
 python "$ALPAMAYO_REPO/h100/a5_export_frames.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a5.log"
 
+step "3e fp32 references for verify.py (expert, prefill, decode) -- CPU, ~15 min"
+python "$ALPAMAYO_REPO/h100/a6_reference_io.py" 2>&1 | tee "$ALPAMAYO_ROOT/logs/a6.log"
+
 step "4  manifest"
 cd "$ALPAMAYO_ROOT"
 rm -f MANIFEST.sha256
 # Only what the Jetson actually needs. Trace scratch dirs are excluded by name.
-find onnx fixtures golden frames -type f ! -path '*__trace*' ! -name '*.tmp.onnx*' -print0 \
+find onnx fixtures golden frames refs -type f ! -path '*__trace*' ! -name '*.tmp.onnx*' -print0 \
   | sort -z | xargs -0 sha256sum > MANIFEST.sha256
 echo "$(wc -l < MANIFEST.sha256) files"
-du -sh onnx fixtures golden frames
+du -sh onnx fixtures golden frames refs
 echo "payload: $(du -cb onnx fixtures golden frames 2>/dev/null | tail -1 | cut -f1 | awk '{printf "%.2f GB", $1/1e9}')"
 
 step "done"
 cat <<MSG
 Everything the Jetson needs is under $ALPAMAYO_ROOT:
-  onnx/  fixtures/  golden/  frames/  MANIFEST.sha256
+  onnx/  fixtures/  golden/  frames/  refs/  MANIFEST.sha256
 
 Pull it from your Mac (the cluster cannot reach the Jetson):
   rsync -avh --partial --progress \\
-      <user>@<cluster>:$ALPAMAYO_ROOT/{onnx,fixtures,golden,frames,MANIFEST.sha256} \\
+      <user>@<cluster>:$ALPAMAYO_ROOT/{onnx,fixtures,golden,frames,refs,MANIFEST.sha256} \\
       ~/alpamayo-payload/
 MSG

@@ -3,6 +3,14 @@
 Running NVIDIA's 10B driving VLA (`nvidia/Alpamayo-R1-10B`) on a JetPack 5.1.7
 AGX Xavier 32 GB, and measuring where the time goes.
 
+The hybrid runner now saves reasoning text, environment versions, memory and I/O
+counters, and detailed latency telemetry in its results JSON. See
+[telemetry setup and output fields](xavier/TELEMETRY.md). The update includes a
+prepared vocabulary and requires no engine rebuild.
+
+To use different PhysicalAI clips or timestamps, see
+[new sample preparation and inference](xavier/NEW_SAMPLES.md).
+
 Full write-up and reasoning:
 - **Feasibility study** (what the model is, why the reference stack can't run, latency
   budget, quantize-vs-distil) — https://claude.ai/code/artifact/1b9756d7-f078-4e53-95aa-d036efd8e33f
