@@ -164,7 +164,12 @@ def capture(args):
     n_img = int(grid.shape[0])
     print("pixels %s  grid %s  (%d images)" % (tuple(px.shape), grid.tolist()[0], n_img))
 
-    print("loading %s" % args.model)
+    if not os.path.isdir(args.model):
+        raise SystemExit("checkpoint not found: %s\n"
+                         "Set ALPAMAYO_MODEL or pass --model." % args.model)
+    shards = len([f for f in os.listdir(args.model) if f.endswith(".safetensors")])
+    print("loading %s  (%d safetensors shards, local, no download)"
+          % (args.model, shards))
     model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16).eval()
     visual = model.vlm.model.visual.to("cuda")
     del model                                     # only the tower is needed

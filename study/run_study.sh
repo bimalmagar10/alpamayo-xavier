@@ -43,6 +43,21 @@ else
     exit 1
 fi
 
+# This study reads the SAVED golden pixels, so it never streams the driving
+# clip -- unlike a1/a3b, which is why env.sh leaves HF_HUB_OFFLINE=0. The two
+# Qwen configs the reference code resolves at load time are already in HF_HOME,
+# so going offline here turns a possible network hang on a compute node with no
+# route out into a cache hit. Export HF_HUB_OFFLINE=0 to override.
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE_OVERRIDE:-1}"
+
+echo "model   : $ALPAMAYO_MODEL"
+echo "golden  : $ALPAMAYO_ROOT/golden"
+echo "hf cache: $HF_HOME  (offline=$HF_HUB_OFFLINE)"
+[ -d "$ALPAMAYO_MODEL" ] || { echo "checkpoint missing at ALPAMAYO_MODEL" >&2; exit 1; }
+[ -f "$ALPAMAYO_ROOT/golden/inputs.npz" ] || {
+    echo "no golden/inputs.npz under ALPAMAYO_ROOT -- run h100/a1_golden.py first" >&2
+    exit 1; }
+
 echo "python  : $(which python)  $(python -V 2>&1)"
 python - <<'PY'
 import torch
