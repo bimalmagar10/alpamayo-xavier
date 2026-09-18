@@ -361,7 +361,7 @@ def capture(args):
     npz = os.path.join(args.out, "vision_study.npz")
     np.savez_compressed(
         npz, block_ms=rec["block_ms"], image_sim=rec["image_sim"],
-        keep=np.array(curves["keep"]), prune_importance=np.array(curves["importance"]),
+        keep=np.array(curves["keep"]),
         entropy=rec["entropy"], patch_sim=rec["patch_sim"],
         **{"prune_%s" % m: np.array(curves[m]) for m in modes},
         **{"tap%s" % k: v for k, v in rec["taps"].items()})
