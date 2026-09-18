@@ -18,3 +18,4 @@ __pycache__/
 *.pyc
 .venv/
 ar1_venv/
+.DS_Store
