@@ -38,9 +38,10 @@ What is measured, and where the idea comes from
   the same ranking as SpecPrune's, since summing and averaging over the context
   differ only by a constant. Their Eq (3) anchors the selection with the top
   K_key tokens (K_key = 4 in their reported setup) and then augments it by
-  trading relevance against feature diversity; `--mmr` reimplements that as a
-  greedy maximal-marginal-relevance pass, because Section 3.3.3's exact
-  augmentation equation did not survive text extraction from the PDF.
+  trading relevance against feature diversity. `--mmr` reimplements that as a
+  greedy maximal-marginal-relevance pass, but it is OFF by default: this study
+  is about reading the tower, not about building a pruner, and on a first run
+  the diversity term scored below plain attention at every budget.
 
 * per-patch similarity between the four timesteps of each camera, and between
   whole images. This is SpecPrune-VLA's get_similarity_indices(), which keeps
@@ -647,9 +648,9 @@ def main():
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--attn-rows", type=int, default=256,
                     help="query rows sampled per block for the entropy estimate")
-    ap.add_argument("--mmr", action="store_true", default=True,
-                    help="also rank by EfficientVLA's relevance+diversity selection")
-    ap.add_argument("--no-mmr", dest="mmr", action="store_false")
+    ap.add_argument("--mmr", action="store_true", default=False,
+                    help="also rank by EfficientVLA's relevance+diversity selection "
+                         "(off: the point here is to read the tower, not to prune it)")
     ap.add_argument("--k-key", type=int, default=4,
                     help="EfficientVLA K_key, the unconditionally kept anchor set")
     ap.add_argument("--mmr-lambda", type=float, default=0.5)
