@@ -115,6 +115,66 @@ def surface(x, rows=SURF_TOKENS):
 
 
 # ---------------------------------------------------------------------------
+def patch_vision_norms(torch, visual, mode, record):
+    """Apply the same norm mode to the ViT's own norm modules.
+
+    The vision tower is the HF module, so it never calls graphs.rms_norm --
+    without this its column responds to nothing and looks identical in every
+    pass, which is a property of the harness and not of the model. The exported
+    graph has no such exemption: a3c_decompose_layernorm.py rewrites LayerNorm
+    and RMSNorm alike, because both square their input before reducing.
+
+    Returns a callable that puts the original forwards back.
+    """
+    import torch.nn.functional as F
+
+    undo = []
+
+    def wrap(mod, kind, eps):
+        real = mod.forward
+        w = mod.weight
+        b = getattr(mod, "bias", None)
+
+        def forward(x, *a, **kw):
+            if kind == "ln":
+                ref = F.layer_norm(x.float(), (x.shape[-1],), w.float(),
+                                   None if b is None else b.float(), eps).to(x.dtype)
+                d = x - x.mean(-1, keepdim=True)
+            else:
+                ref = (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True)
+                                               + eps) * w.float()).to(x.dtype)
+                d = x
+            if mode == "reference":
+                out = ref
+            else:
+                u, scale = d, 1.0
+                if mode == "safe":
+                    scale = d.abs().amax(dim=-1, keepdim=True) + 1e-4
+                    u = d / scale
+                v = u * torch.rsqrt(u.pow(2).mean(-1, keepdim=True)
+                                    + (eps / (scale * scale) if mode == "safe" else eps))
+                out = (v * w + b if b is not None else v * w).to(x.dtype)
+            record(x, out, ref)
+            return out
+
+        mod.forward = forward
+        undo.append((mod, real))
+
+    for mod in visual.modules():
+        if isinstance(mod, torch.nn.LayerNorm):
+            wrap(mod, "ln", float(mod.eps))
+        elif (getattr(mod, "weight", None) is not None
+              and "norm" in type(mod).__name__.lower()
+              and getattr(mod.weight, "dim", lambda: 0)() == 1):
+            wrap(mod, "rms", float(getattr(mod, "variance_epsilon",
+                                           getattr(mod, "eps", 1e-6))))
+
+    def restore():
+        for mod, real in undo:
+            mod.forward = real
+    return len(undo), restore
+
+
 def one_pass(torch, arch, graphs, model, dtype, fx, args, mode):
     """Run all three stacks once at `dtype` and return (rec, inputs, grids, norms).
 
@@ -148,6 +208,19 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, mode):
     real_norm = graphs.rms_norm
     norms = {k: [] for k in STACKS}
 
+    def note_norm(name, x, out, ref):
+        width = x.shape[-1]
+        rows = x.detach().float().abs().reshape(-1, width).amax(dim=1)
+        o = out.detach().float()
+        r = ref.detach().float()
+        den = float(r.norm())
+        norms[name].append(dict(
+            max_in=float(rows.max()),
+            rows_over=float((rows > FP16_SQUARE_SAFE).float().mean()),
+            rel=float((o - r).norm()) / (den if den else 1.0),
+            zeroed=float((o.reshape(-1, width).amax(dim=1) == 0).float().mean()),
+            nonfinite=float((~torch.isfinite(o)).float().mean())))
+
     def narrow(x, weight, eps):
         v = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
         return (v * weight).to(x.dtype)
@@ -164,20 +237,18 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, mode):
                "safe": lambda: safe(x, weight, eps)}[mode]()
         name = bucket["name"]
         if name and x.shape[-1] > 256:                # skip the per-head QK norms
-            width = x.shape[-1]
-            rows = x.detach().float().abs().reshape(-1, width).amax(dim=1)
-            o = out.detach().float()
-            r = ref.detach().float()
-            den = float(r.norm())
-            norms[name].append(dict(
-                max_in=float(rows.max()),
-                rows_over=float((rows > FP16_SQUARE_SAFE).float().mean()),
-                rel=float((o - r).norm()) / (den if den else 1.0),
-                zeroed=float((o.reshape(-1, width).amax(dim=1) == 0).float().mean()),
-                nonfinite=float((~torch.isfinite(o)).float().mean())))
+            note_norm(name, x, out, ref)
         return out
 
     graphs.rms_norm = probe
+
+    def vision_record(x, out, ref):
+        if bucket["name"] and x.shape[-1] > 256:
+            note_norm("vision", x, out, ref)
+
+    n_vis_norms, restore_vision = patch_vision_norms(
+        torch, model.vlm.model.visual, mode, vision_record)
+    print("  vision norms   : %d modules patched to mode=%s" % (n_vis_norms, mode))
 
     # decoder_layer is a module-level function that PrefillGraph and ExpertGraph
     # look up at call time, so wrapping it measures exactly what the export
@@ -201,6 +272,7 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, mode):
     finally:
         graphs.decoder_layer = real_layer
         graphs.rms_norm = real_norm
+        restore_vision()
 
     # Fold the flow steps down to the worst step per layer, so the expert
     # subplot shows the largest value that layer ever has to represent.
@@ -248,6 +320,7 @@ def _stacks(torch, arch, graphs, model, dtype, fx, args, rec, inp, note, bucket)
     px = fx["pixel_values"].to(dtype)
     unwrap = lambda o: o[0] if isinstance(o, (tuple, list)) else o
     blocks = model.vlm.model.visual.blocks
+    bucket["name"] = "vision"                 # so the ViT's own norms are recorded
     hooks = [blocks[0].register_forward_pre_hook(
         lambda m, i: inp.__setitem__("vision", stats(unwrap(i))))]
     hooks += [b.register_forward_hook(
@@ -256,6 +329,7 @@ def _stacks(torch, arch, graphs, model, dtype, fx, args, rec, inp, note, bucket)
         vout = graphs.VisionGraph(model.vlm.model.visual, fx["grid"]).eval()(px)
     for h in hooks:
         h.remove()
+    bucket["name"] = None
     if not isinstance(vout, tuple):
         raise SystemExit("vision tower returned no DeepStack maps -- cannot drive prefill")
     visual, ds = vout[0], vout[1:]
