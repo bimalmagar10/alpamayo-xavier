@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Run the Alpamayo-R1 dissection studies on an H100 interactive session.
 #
-#   bash study/run_study.sh              # vision: capture on the GPU, then plot
-#   bash study/run_study.sh plot         # re-plot from the saved .npz, no GPU
+#   bash study/run_study.sh              # both studies: capture on the GPU, then plot
+#   bash study/run_study.sh plot         # re-plot both from the saved files, no GPU
+#   bash study/run_study.sh act          # the activation study alone
+#   bash study/run_study.sh vision plot  # one study, one stage
 #   STUDY_LOAD_CUDA=0 bash study/run_study.sh    # skip the CUDA module (see below)
 #
 # Uses the SAME alpamayo environment as the rest of the pipeline
@@ -12,7 +14,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
-STAGE="${1:-all}"
+# First argument is a stage when it names one, otherwise it names a study.
+case "${1:-}" in
+    all|capture|plot) WHICH=all;       STAGE="$1" ;;
+    "")               WHICH=all;       STAGE=all ;;
+    *)                WHICH="$1";      STAGE="${2:-all}" ;;
+esac
+case "$WHICH" in
+    all|vision|act) ;;
+    *) echo "usage: run_study.sh [vision|act|all] [all|capture|plot]" >&2; exit 2 ;;
+esac
 
 # --- environment modules -------------------------------------------------
 # ORDER MATTERS: modules first, venv last, so the venv's python wins on PATH.
@@ -74,9 +85,16 @@ python -c "import matplotlib" 2>/dev/null || {
 
 # --- the study -----------------------------------------------------------
 mkdir -p "$HERE/out"
-echo
-echo "=============== vision tower ==============="
-python "$HERE/vision_study.py" --stage "$STAGE" --out "$HERE/out"
+if [ "$WHICH" = all ] || [ "$WHICH" = vision ]; then
+    echo
+    echo "=============== vision tower ==============="
+    python "$HERE/vision_study.py" --stage "$STAGE" --out "$HERE/out"
+fi
+if [ "$WHICH" = all ] || [ "$WHICH" = act ]; then
+    echo
+    echo "=========== activations vs the fp16 wall ==========="
+    python "$HERE/activation_study.py" --stage "$STAGE" --out "$HERE/out"
+fi
 
 echo
 echo "figures in $HERE/out:"

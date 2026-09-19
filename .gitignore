@@ -19,3 +19,8 @@ __pycache__/
 .venv/
 ar1_venv/
 .DS_Store
+learn/
+study/
+tests/
+analysis
+artifacts/
