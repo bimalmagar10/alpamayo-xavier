@@ -295,26 +295,29 @@ def plot(args):
                                     "font.family": "serif", "savefig.dpi": 600,
                                     "savefig.bbox": "tight",
                                     "axes.spines.top": False, "axes.spines.right": False})
-    BLUE, RUST, TEAL, PLUM, FAULT = "#1F4E79", "#7A2E23", "#0B6B63", "#473C6B", "#A32318"
+    # Okabe-Ito for the data, neutral ink for the two fp16 rules: distinguishable
+    # in greyscale and under every common form of colour blindness.
+    SERIES = ("#0072B2", "#D55E00", "#009E73")
+    INK, GREY = "#1A1A1A", "#9099A1"
 
     path = os.path.join(args.out, "activation_study.json")
     if not os.path.exists(path):
         raise SystemExit("no %s -- run the capture stage on the H100 first" % path)
     doc = json.load(open(path))
     lim, ceil, k = doc["fp16_square_safe"], doc["fp16_max"], doc["topk"]
-    COLOUR = {"vision": TEAL, "language model": BLUE, "expert": PLUM}
+    COLOUR = dict(zip(STACKS, SERIES))
     TITLE = {"vision": "vision tower, %d blocks",
              "language model": "language model, %d layers",
              "expert": "action expert, %d layers"}
-    RANK = [("largest $|x|$", "-o", 2.2, 0.95, 1.00), ("2nd", "--s", 1.9, 0.85, 0.72),
-            ("3rd", ":^", 1.7, 0.80, 0.50)]
+    RANK = [("largest", "-o", 1.9, 0.85, 1.00), ("2nd", "--s", 1.7, 0.75, 0.70),
+            ("3rd", ":^", 1.5, 0.70, 0.48)]
 
     def grid(ax, axis="y"):
         ax.grid(True, axis=axis, lw=0.4, alpha=0.55)
         ax.set_axisbelow(True)
 
     # ---- figure A: magnitude with depth ----------------------------------
-    fig, ax = plt.subplots(1, 3, figsize=(7.1, 2.05), constrained_layout=True,
+    fig, ax = plt.subplots(1, 3, figsize=(6.9, 1.72), constrained_layout=True,
                            sharey=True)
     summary = []
     for i, name in enumerate(STACKS):
@@ -337,19 +340,17 @@ def plot(args):
             if entry:                                 # the stream entering layer 0
                 a.semilogy([xin], [entry["top"][r]], mk[-1], ms=ms, color=c,
                            alpha=al, zorder=6 - r)
-        a.semilogy(x, [w["median"] for w in rows], "-", color=MUTED, lw=0.9,
-                   label="median $|x|$", zorder=3)
+        a.semilogy(x, [w["median"] for w in rows], "-", color=GREY, lw=0.8,
+                   label="median", zorder=3)
         if entry:
-            a.axvline(xin / 2.0, color=MUTED, lw=0.6, ls=":", zorder=1)
+            a.axvline(xin / 2.0, color=GREY, lw=0.5, ls=":", zorder=1)
 
-        # Both fp16 ceilings, because the gap between them IS the defect: every
-        # value clears the upper one and almost none clear the lower.
-        a.axhline(ceil, color=MUTED, lw=0.8, ls=(0, (4, 2)), zorder=2,
-                  label="fp16 max, $65\\,504$ \u2014 every $|x|$ fits here")
-        a.axhline(lim, color=FAULT, lw=1.0, zorder=4,
-                  label="$\\sqrt{65\\,504}=256$ \u2014 above this $x^2$ overflows")
+        # Both fp16 ceilings: the gap between them is the defect.
+        a.axhline(ceil, color=GREY, lw=0.7, ls=(0, (4, 2)), zorder=2,
+                  label="$65\\,504$")
+        a.axhline(lim, color=INK, lw=0.9, zorder=4, label="$\\sqrt{65\\,504}$")
 
-        a.set_xlabel("layer")
+        a.set_xlabel("layer", labelpad=1)
         a.set_xlim(xin - 1.3, len(rows) - 0.4)
         ticks = [t for t in a.get_xticks() if 0 <= t <= len(rows) - 1]
         a.set_xticks([xin] + list(ticks))
@@ -362,49 +363,32 @@ def plot(args):
     ax[0].set_ylabel("$|x|$ in the residual stream")
     ax[0].set_ylim(top=ceil * 3.0)
     ax[0].yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10.0, numticks=15))
-    # Legend and caption stack below the panels. Both are anchored explicitly
-    # against measured positions: an "outside" legend is owned by the layout
-    # engine, which re-runs inside savefig and slides it back over the caption.
+    # One row of bare labels under the panels, anchored against a measured
+    # position: an "outside" legend is owned by the layout engine, which re-runs
+    # inside savefig and moves it afterwards.
     fig.canvas.draw()
     inv = fig.transFigure.inverted()
-    rend = fig.canvas.get_renderer()
-    ybot = min(a.get_tightbbox(rend).transformed(inv).y0 for a in ax)
+    ybot = min(a.get_tightbbox(fig.canvas.get_renderer()).transformed(inv).y0
+               for a in ax)
     fig.set_layout_engine("none")                 # freeze the panels where they are
     h, l = ax[0].get_legend_handles_labels()
-    leg = fig.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, ybot - 0.05),
-                     ncol=3, fontsize=5.8, handlelength=1.6, handletextpad=0.4,
-                     columnspacing=1.6, labelspacing=0.32, borderaxespad=0.0,
-                     frameon=False)
-    fig.canvas.draw()
-    y0 = leg.get_window_extent().transformed(fig.transFigure.inverted()).y0
-    fig.text(0.5, y0 - 0.035, caption(summary, lim, ceil), ha="center", va="top",
-             fontsize=5.9, color=MUTED, linespacing=1.55)
+    fig.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, ybot - 0.025),
+               ncol=len(h), fontsize=5.6, handlelength=1.4, handletextpad=0.35,
+               columnspacing=1.1, borderaxespad=0.0, frameon=False)
     save(fig, "fig_activations", args.out)
 
     # ---- figure B: the token x channel landscape -------------------------
-    surfaces(doc, args.out, COLOUR, MUTED, TITLE)
+    surfaces(doc, args.out)
     report(summary, lim, ceil, doc.get("flow_steps", 10))
 
 
-def caption(summary, lim, ceil):
-    """One sentence under the figure, built from the run so it cannot go stale."""
-    if not summary:
-        return ""
-    name, rows, _, top1, _ = max(summary, key=lambda t: t[3].max())
-    peak = float(top1.max())
-    return ("Every value fits in fp16: the largest, %s in the %s, is %.0f%% of the "
-            "%s ceiling.\nRMSNorm squares its input before it reduces, so the limit "
-            "that binds is $\\sqrt{65\\,504}=256$ \u2014 and %s$^2$ = %s does not fit."
-            % (_fmt(peak), name, 100 * peak / ceil, _fmt(ceil), _fmt(peak),
-               _sci(peak ** 2)))
-
-
-def surfaces(doc, outdir, COLOUR, MUTED, TITLE):
+def surfaces(doc, outdir):
     """|x| over tokens x channels at each stack's peak layer.
 
     The 3D view is PrefixQuant's plot_3D_tensor (Chen et al.,
-    github.com/ChenMnZ/PrefixQuant, utils/plot_utils.py): plot_surface with the
-    coolwarm map, Channel on x, Token on y, viewed from elev=20, azim=-45.
+    github.com/ChenMnZ/PrefixQuant, utils/plot_utils.py): plot_surface, Channel
+    on x, Token on y, viewed from elev=20, azim=-45. Their coolwarm is swapped
+    for viridis, which keeps its ordering in greyscale.
     """
     import matplotlib
     import matplotlib.pyplot as plt
@@ -419,7 +403,7 @@ def surfaces(doc, outdir, COLOUR, MUTED, TITLE):
     if not got:
         return
 
-    fig = plt.figure(figsize=(7.1, 2.35), constrained_layout=True)
+    fig = plt.figure(figsize=(6.9, 1.95), constrained_layout=True)
     for i, name in enumerate(STACKS):
         a = fig.add_subplot(1, 3, i + 1, projection="3d")
         key = "surf_%s" % name.replace(" ", "_")
@@ -430,17 +414,17 @@ def surfaces(doc, outdir, COLOUR, MUTED, TITLE):
         if g.shape[0] > SURF_PLOT_ROWS:               # keep every channel; thin tokens
             g = g[np.linspace(0, g.shape[0] - 1, SURF_PLOT_ROWS).astype(int)]
         X, Y = np.meshgrid(np.arange(g.shape[1]), np.arange(g.shape[0]))
-        a.plot_surface(X, Y, g, cmap="coolwarm", antialiased=False, shade=True,
+        a.plot_surface(X, Y, g, cmap="viridis", antialiased=False, shade=True,
                        linewidth=0, rstride=1, cstride=1, rasterized=True)
         a.view_init(elev=20.0, azim=-45)
         try:                      # fill the panel; 3D axes default to tiny
-            a.set_box_aspect((4, 4, 2.4), zoom=1.22)
+            a.set_box_aspect((4, 4, 2.6), zoom=1.38)
         except TypeError:         # matplotlib < 3.6 has no zoom
-            a.set_box_aspect((4, 4, 2.4))
+            a.set_box_aspect((4, 4, 2.6))
         meta = doc.get("surfaces", {}).get(name, {})
         a.set_title("(%s) %s, layer %s"
                     % ("abc"[i], name, meta.get("layer", "?")), loc="left",
-                    pad=-8, fontsize=7.2)
+                    pad=-16, fontsize=7.2)
         a.set_xlabel("Channel", fontsize=6.2, labelpad=-5)
         a.set_ylabel("Token", fontsize=6.2, labelpad=-5)
         a.tick_params(labelsize=5.2, pad=-2.5)
@@ -451,19 +435,7 @@ def surfaces(doc, outdir, COLOUR, MUTED, TITLE):
         for pane in (a.xaxis, a.yaxis, a.zaxis):
             pane.pane.set_alpha(0.0)
             pane._axinfo["grid"]["linewidth"] = 0.25
-    fig.text(0.5, -0.02,
-             "The large values stand in a handful of fixed columns, the same ones at "
-             "every layer. A per-channel scale keeps them;\na per-tensor scale spends "
-             "its whole range on them \u2014 which is also why rescaling each row by its "
-             "own max makes RMSNorm fp16-safe.",
-             ha="center", va="top", fontsize=5.9, color=MUTED, linespacing=1.5)
     save(fig, "fig_activation_surface", outdir)
-
-
-def _sci(v):
-    """1.7e8 -> $1.7\\times10^{8}$, so the caption reads like the paper it sits in."""
-    e = int(np.floor(np.log10(abs(v)))) if v else 0
-    return "$%.1f\\times10^{%d}$" % (v / 10.0 ** e, e)
 
 
 def _fmt(v):
