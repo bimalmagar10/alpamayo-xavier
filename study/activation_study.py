@@ -15,14 +15,22 @@ layers, the weights prefill and decode share) and action expert (36 layers):
   fig_activation_surface   |x| over tokens x channels at each stack's peak
                            layer, which is where the outlier columns show
 
-Two passes, so the rows can be compared directly:
+Three passes over identical inputs, one row each, so they read straight down:
 
-  bf16   the reference, where every value is representable
-  fp16   every weight and activation cast down, and RMSNorm's square kept in
-         fp16 the way the exported graph computes it. The reference
-         implementation (h100/graphs.py:109) upcasts to fp32 first and so never
-         shows the defect; --upcast-norm reproduces that if you want to see the
-         difference the upcast alone makes. --no-fp16 captures bf16 only.
+  bf16         the reference
+  fp16         every weight and activation cast down, and RMSNorm's square kept
+               in fp16 the way the exported graph computes it
+  fp16 + fix   the same cast with a3c_decompose_layernorm.py's
+               rmsnorm_fp16safe() row rescale in front of the square
+
+The rows for bf16 and fp16 are expected to agree on magnitude wherever the norm
+still works: 26 240 is 40% of fp16's range, so the format holds the residual
+stream perfectly well. What fp16 cannot do is square it. Where that bites, the
+fp16 row stops tracking -- rsqrt(inf) is 0, so the affected rows are annihilated
+rather than turned into nan, and the stream simply stops being updated.
+
+--upcast-norm gives the fp16 pass the reference's fp32 upcast, which hides the
+defect; --no-fp16 captures bf16 alone.
 
 Nothing in this model comes close to fp16's 65 504 -- the largest value measured
 is 26 240, 40% of it. That is the point: RMSNorm squares before it reduces, so
@@ -107,14 +115,19 @@ def surface(x, rows=SURF_TOKENS):
 
 
 # ---------------------------------------------------------------------------
-def one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm):
-    """Run all three stacks once at `dtype` and return (rec, inputs, grids).
+def one_pass(torch, arch, graphs, model, dtype, fx, args, mode):
+    """Run all three stacks once at `dtype` and return (rec, inputs, grids, norms).
 
-    fp16_norm keeps RMSNorm's square in `dtype` instead of upcasting to fp32.
-    The reference implementation (h100/graphs.py:109) upcasts, and so hides the
-    defect; the exported graph decomposes the norm into Pow/ReduceMean/Sqrt at
-    the engine's precision and does not. Matching the export is the point of
-    the fp16 pass.
+    `mode` picks how RMSNorm is computed:
+
+      reference  h100/graphs.py:109 as written -- v = x.float() first, so the
+                 square happens in fp32 and cannot overflow whatever `dtype` is.
+      narrow     the square stays in `dtype`, which is what the exported graph
+                 does: torch.onnx.export writes Pow/ReduceMean/Add/Sqrt/Div and
+                 TensorRT runs them at the engine's precision.
+      safe       a3c_decompose_layernorm.py's rmsnorm_fp16safe(): divide each
+                 row by s = max|x| + 1e-4 before the square and feed eps/s^2 to
+                 the Add. Algebraically identical, and nothing large is squared.
     """
     import gc
 
@@ -135,13 +148,20 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm):
     real_norm = graphs.rms_norm
     norms = {k: [] for k in STACKS}
 
+    def narrow(x, weight, eps):
+        v = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+        return (v * weight).to(x.dtype)
+
+    def safe(x, weight, eps):
+        s = x.abs().amax(dim=-1, keepdim=True) + 1e-4
+        u = x / s                                     # now max|u| = 1, u^2 <= 1
+        v = u * torch.rsqrt(u.pow(2).mean(-1, keepdim=True) + eps / (s * s))
+        return (v * weight).to(x.dtype)
+
     def probe(x, weight, eps):
         ref = real_norm(x, weight, eps)               # fp32 upcast: the reference
-        if fp16_norm:
-            v = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
-            out = (v * weight).to(x.dtype)
-        else:
-            out = ref
+        out = {"reference": lambda: ref, "narrow": lambda: narrow(x, weight, eps),
+               "safe": lambda: safe(x, weight, eps)}[mode]()
         name = bucket["name"]
         if name and x.shape[-1] > 256:                # skip the per-head QK norms
             width = x.shape[-1]
@@ -192,6 +212,18 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm):
                              key=lambda w: w["top"][0]) for l in range(L)]
         if "expert" in best:        # re-index the kept grid onto the folded layers
             best["expert"] = (best["expert"][0], best["expert"][1] % L, best["expert"][2])
+    hit = [(n, w) for n in STACKS for w in norms[n] if w["rows_over"] > 0]
+    if norms["language model"] or norms["expert"]:
+        worst = max((w for n in STACKS for w in norms[n]), key=lambda w: w["rel"],
+                    default=None)
+        print("  RMSNorm        : mode=%s, %d of %d probed calls get an input whose "
+              "square overflows fp16" % (mode, len(hit),
+                                         sum(len(norms[n]) for n in STACKS)))
+        if worst:
+            print("                   worst output error %.2f%% of the fp32 reference, "
+                  "%.1f%% of rows annihilated"
+                  % (100 * worst["rel"], 100 * worst["zeroed"]))
+
     # Two residual-stream norms per decoder layer; keep the worse of each pair.
     for name in STACKS:
         v = norms[name]
@@ -327,17 +359,18 @@ def capture(args):
     model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16).to("cuda").eval()
 
     passes, grids = {}, {}
-    plan = [("bf16", torch.bfloat16, False)]
+    plan = [("bf16", torch.bfloat16, "reference")]
     if not args.no_fp16:
-        plan.append(("fp16", torch.float16, not args.upcast_norm))
-    for tag, dtype, fp16_norm in plan:
-        print("\n%s pass%s" % (tag, "  (RMSNorm squares in %s, as the export does)" % tag
-                                if fp16_norm else ""))
-        if dtype != torch.bfloat16:
+        plan.append(("fp16", torch.float16,
+                     "reference" if args.upcast_norm else "narrow"))
+        plan.append(("fp16 + fix", torch.float16, "safe"))
+    for tag, dtype, mode in plan:
+        print("\n%s pass  (RMSNorm: %s)" % (tag, mode))
+        if dtype != torch.bfloat16 and next(model.parameters()).dtype != dtype:
             model = model.to(dtype)
         rec, inp, best, norms = one_pass(torch, arch, graphs, model, dtype,
-                                         fx, args, fp16_norm)
-        passes[tag] = dict(dtype=str(dtype), narrow_norm=fp16_norm, stacks=rec,
+                                         fx, args, mode)
+        passes[tag] = dict(dtype=str(dtype), norm_mode=mode, stacks=rec,
                            inputs=inp, norms=norms,
                            surfaces={n: dict(layer=v[1], peak=v[0],
                                              tokens=int(v[2].shape[0]),
@@ -350,12 +383,13 @@ def capture(args):
     doc = dict(prefill=prefill, max_seq=max_seq, flow_steps=arch.FLOW_STEPS,
                fp16_max=FP16_MAX, fp16_square_safe=FP16_SQUARE_SAFE, topk=TOPK,
                gpu=torch.cuda.get_device_name(0), passes=passes,
-               note="bf16 is the reference. The fp16 pass casts every weight and "
-                    "activation and, unless --upcast-norm, keeps RMSNorm's square "
-                    "in fp16 the way the exported graph does -- graphs.rms_norm "
-                    "upcasts to fp32 and would hide the defect. Expert folded to "
-                    "the worst of %d flow steps; 'language model' is the weight "
-                    "set prefill and decode share." % arch.FLOW_STEPS)
+               note="Three passes over identical inputs. bf16 is the reference. "
+                    "fp16 casts every weight and activation and keeps RMSNorm's "
+                    "square in fp16, the way the exported graph computes it. "
+                    "'fp16 + fix' is the same cast with a3c's rmsnorm_fp16safe() "
+                    "row rescale. Expert folded to the worst of %d flow steps; "
+                    "'language model' is the weight set prefill and decode share."
+                    % arch.FLOW_STEPS)
     path = os.path.join(args.out, "activation_study.json")
     with open(path, "w") as f:
         json.dump(doc, f, indent=1)
@@ -407,7 +441,8 @@ def plot(args):
         raise SystemExit("no %s -- run the capture stage on the H100 first" % path)
     doc = json.load(open(path))
     lim, ceil, k = doc["fp16_square_safe"], doc["fp16_max"], doc["topk"]
-    passes = [t for t in ("bf16", "fp16") if t in doc.get("passes", {})]
+    passes = [t for t in ("bf16", "fp16", "fp16 + fix")
+              if t in doc.get("passes", {})]
     if not passes:
         raise SystemExit("%s holds no passes -- re-run the capture stage" % path)
     COLOUR = dict(zip(STACKS, SERIES))
@@ -418,7 +453,7 @@ def plot(args):
             ("3rd", ":^", 1.5, 0.70, 0.48)]
 
     nrow = len(passes)
-    fig, ax = plt.subplots(nrow, 3, figsize=(6.9, 1.55 * nrow + 0.30), sharey=True,
+    fig, ax = plt.subplots(nrow, 3, figsize=(6.9, 1.32 * nrow + 0.34), sharey=True,
                            sharex="col", constrained_layout=True, squeeze=False)
     summary, floor, any_bad = [], [], False
     for r, tag in enumerate(passes):
@@ -497,74 +532,8 @@ def plot(args):
     save(fig, "fig_activations", args.out)
 
     # ---- figure B: the token x channel landscape -------------------------
-    rmsnorm_figure(doc, args.out, COLOUR, INK, GREY)
     surfaces(doc, args.out, passes[0])
     report(doc, summary, lim, ceil)
-
-
-def rmsnorm_figure(doc, outdir, COLOUR, INK, GREY):
-    """What the fp16 square actually costs, layer by layer.
-
-    Two fractions on one 0-100% axis:
-      * how many tokens carry a value whose square fp16 cannot hold, measured on
-        the bf16 activations -- the reach of the defect;
-      * how far the fp16 norm's output then lands from the fp32 reference on
-        exactly the same input -- the damage.
-
-    The second is only measurable where the stack goes through graphs.rms_norm,
-    which is the language model and the expert: the code the ONNX export traces.
-    The vision tower runs the HF module's own norms, so only the first curve
-    appears there -- but a3c_decompose_layernorm.py rewrites both LayerNorm and
-    RMSNorm in the exported graph, and both square their input, so the same
-    criterion applies to it.
-    """
-    import matplotlib
-    import matplotlib.pyplot as plt
-
-    base = doc["passes"].get("bf16")
-    fp = doc["passes"].get("fp16")
-    if not base:
-        return
-    fig, ax = plt.subplots(1, 3, figsize=(6.9, 1.72), sharey=True,
-                           constrained_layout=True)
-    for i, name in enumerate(STACKS):
-        a = ax[i]
-        rows = base["stacks"].get(name) or []
-        if not rows:
-            a.text(0.5, 0.5, "not captured", ha="center", va="center", fontsize=6.4,
-                   color=GREY, transform=a.transAxes)
-            continue
-        c = COLOUR[name]
-        x = np.arange(len(rows))
-        a.plot(x, [100 * w["rows_over"] for w in rows], "-o", ms=1.9, lw=0.85,
-               color=c, label="tokens fp16 cannot square", zorder=5)
-        nm = (fp or {}).get("norms", {}).get(name) or []
-        if len(nm) == len(rows):
-            a.plot(x, [100 * min(w["rel"], 1.0) for w in nm], "--s", ms=1.7, lw=0.75,
-                   color=INK, alpha=0.85, label="fp16 norm output error", zorder=6)
-        a.set_xlabel("layer", labelpad=1)
-        a.set_xlim(-0.6, len(rows) - 0.4)
-        a.set_ylim(-4, 104)
-        panel(a, "abc"[i], name)
-        a.grid(True, axis="y", lw=0.4, alpha=0.55)
-        a.set_axisbelow(True)
-    ax[0].set_ylabel("% of tokens", labelpad=2)
-
-    fig.canvas.draw()
-    inv = fig.transFigure.inverted()
-    ybot = min(a.get_tightbbox(fig.canvas.get_renderer()).transformed(inv).y0
-               for a in ax)
-    fig.set_layout_engine("none")
-    # Proxy handles: the first series is drawn in each panel's own colour, so a
-    # handle lifted from one panel would claim that colour for all three.
-    from matplotlib.lines import Line2D
-    proxies = [Line2D([], [], color=GREY, marker="o", ms=1.9, lw=0.85),
-               Line2D([], [], color=INK, marker="s", ms=1.7, lw=0.75, ls="--")]
-    labels = ["tokens fp16 cannot square", "fp16 norm output error"]
-    fig.legend(proxies, labels, loc="upper center", bbox_to_anchor=(0.5, ybot - 0.02),
-               ncol=2, fontsize=5.6, handlelength=1.4, handletextpad=0.35,
-               columnspacing=1.2, borderaxespad=0.0, frameon=False)
-    save(fig, "fig_rmsnorm", outdir)
 
 
 def surfaces(doc, outdir, tag):
@@ -680,22 +649,24 @@ def report(doc, summary, lim, ceil):
             print("  %-15s fp16 peak differs from bf16 by at most %.2f%% -- both "
                   "formats hold these values" % (name, 100 * max(rel)))
 
-        print("\nthe RMSNorm applied to it  (squares in %s)"
-              % ("fp16, as the exported graph does" if fp.get("narrow_norm")
-                 else "fp32, as graphs.rms_norm does -- the defect stays hidden"))
+    for tag in ("fp16", "fp16 + fix"):
+        pas = doc["passes"].get(tag)
+        if not pas:
+            continue
+        print("\nthe RMSNorm applied to it  (%s, mode=%s)"
+              % (tag, pas.get("norm_mode", "?")))
         for name in STACKS:
-            nm = fp.get("norms", {}).get(name) or []
+            nm = pas.get("norms", {}).get(name) or []
             if not nm:
-                print("  %-15s not routed through graphs.rms_norm (HF module's own "
-                      "norms); see the %% column above" % name)
+                print("  %-15s not routed through graphs.rms_norm (the HF module "
+                      "has its own norms); see the %% column above" % name)
                 continue
             hit = [j for j, w in enumerate(nm) if w["rows_over"] > 0]
             worst = max(nm, key=lambda w: w["rel"])
-            print("  %-15s first layer whose input cannot be squared: %s"
-                  % (name, hit[0] if hit else "none"))
-            print("  %-15s worst output error %.1f%% of the reference norm; "
-                  "%.1f%% of tokens came out all-zero"
-                  % ("", 100 * worst["rel"], 100 * worst["zeroed"]))
+            print("  %-15s first layer whose input cannot be squared in fp16: %s   "
+                  "worst output error %.2f%%,  %.1f%% of rows annihilated"
+                  % (name, hit[0] if hit else "none", 100 * worst["rel"],
+                     100 * worst["zeroed"]))
     print("\n  expert folded to the worst of %d flow steps; 'language model' is the"
           % steps)
     print("  weight set prefill and decode share, so it covers both.")
