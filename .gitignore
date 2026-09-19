@@ -20,7 +20,9 @@ __pycache__/
 ar1_venv/
 .DS_Store
 learn/
-study/
 tests/
-analysis
 artifacts/
+
+# Source under study/ and analysis/ is tracked; only their output is not.
+study/out/
+analysis/figures/

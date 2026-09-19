@@ -1,0 +1,23 @@
+\documentclass[aspectratio=169]{beamer}
+\usepackage{graphicx}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamercolor{background canvas}{bg=white}
+\graphicspath{{figures/}{./}}
+\setbeamersize{text margin left=0pt,text margin right=0pt}
+
+\newcommand{\plate}[1]{%
+  \begin{frame}[plain]
+    \centering
+    \includegraphics[width=0.96\textwidth,height=0.92\textheight,keepaspectratio]{#1}
+  \end{frame}}
+
+\begin{document}
+
+\plate{fig01_why_golden.pdf}
+\plate{fig02_export_sizes.pdf}
+\plate{fig03_pieces_and_weightmap.pdf}
+\plate{fig04_pipeline.pdf}
+\plate{fig05_latency.pdf}
+
+\end{document}
