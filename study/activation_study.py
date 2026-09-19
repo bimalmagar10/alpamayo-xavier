@@ -671,6 +671,12 @@ def _fmt(v):
     return format(int(round(v)), ",d").replace(",", "\u2009") if v >= 100 else "%.1f" % v
 
 
+def gap_top(a_rows, b_rows):
+    """Largest relative difference in the top |x| between two passes, as a %."""
+    return 100 * max(abs(b["top"][0] - a["top"][0]) / max(a["top"][0], 1e-9)
+                     for a, b in zip(a_rows, b_rows))
+
+
 def report(doc, summary, lim, ceil):
     """The audit trail, in the same shape vision_study.py prints."""
     steps = doc.get("flow_steps", 10)
@@ -713,16 +719,24 @@ def report(doc, summary, lim, ceil):
 
     fp = doc["passes"].get("fp16")
     if fp:
-        print("\nthe residual stream itself")
+        print("\nthe residual stream itself, against bf16")
+        print("  %-15s %-12s %10s %10s" % ("stack", "pass", "peak |x|", "median"))
         for name in STACKS:
-            r16 = fp["stacks"].get(name) or []
             r32 = (base or {}).get("stacks", {}).get(name) or []
-            if not r16 or len(r16) != len(r32):
+            if not r32:
                 continue
-            rel = [abs(b["top"][0] - a["top"][0]) / max(a["top"][0], 1e-9)
-                   for a, b in zip(r32, r16)]
-            print("  %-15s fp16 peak differs from bf16 by at most %.2f%% -- both "
-                  "formats hold these values" % (name, 100 * max(rel)))
+            for tag in ("fp16", "fp16 + fix"):
+                rows = (doc["passes"].get(tag) or {}).get("stacks", {}).get(name) or []
+                if len(rows) != len(r32):
+                    continue
+                med = 100 * max(abs(b["median"] - a["median"]) / max(a["median"], 1e-9)
+                                for a, b in zip(r32, rows))
+                print("  %-15s %-12s %9.2f%% %9.2f%%"
+                      % (name, tag, gap_top(r32, rows), med))
+        print("  The peak barely moves: a massive activation rides the residual")
+        print("  connection, and a layer whose norm was annihilated adds zero, so the")
+        print("  value is carried forward untouched. The median is made of the")
+        print("  per-layer contributions that were deleted, so that is where it shows.")
 
     for tag in ("fp16", "fp16 + fix"):
         pas = doc["passes"].get(tag)
