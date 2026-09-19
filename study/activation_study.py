@@ -128,13 +128,36 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm):
         if st["top"][0] > best.get(name, (0.0,))[0]:
             best[name] = (st["top"][0], len(rec[name]) - 1, surface(x))
 
+    # Probe the norm itself, not just the stream it reads. The residual stream
+    # is representable in both formats -- that is why the two passes agree on
+    # it. What differs is one operation applied to it: RMSNorm squares before
+    # it reduces, and in fp16 that square is what overflows.
     real_norm = graphs.rms_norm
-    if fp16_norm:
-        def narrow_norm(x, weight, eps):
-            v = x                                     # no fp32 upcast
-            v = v * torch.rsqrt(v.pow(2).mean(-1, keepdim=True) + eps)
-            return (v * weight).to(x.dtype)
-        graphs.rms_norm = narrow_norm
+    norms = {k: [] for k in STACKS}
+
+    def probe(x, weight, eps):
+        ref = real_norm(x, weight, eps)               # fp32 upcast: the reference
+        if fp16_norm:
+            v = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+            out = (v * weight).to(x.dtype)
+        else:
+            out = ref
+        name = bucket["name"]
+        if name and x.shape[-1] > 256:                # skip the per-head QK norms
+            width = x.shape[-1]
+            rows = x.detach().float().abs().reshape(-1, width).amax(dim=1)
+            o = out.detach().float()
+            r = ref.detach().float()
+            den = float(r.norm())
+            norms[name].append(dict(
+                max_in=float(rows.max()),
+                rows_over=float((rows > FP16_SQUARE_SAFE).float().mean()),
+                rel=float((o - r).norm()) / (den if den else 1.0),
+                zeroed=float((o.reshape(-1, width).amax(dim=1) == 0).float().mean()),
+                nonfinite=float((~torch.isfinite(o)).float().mean())))
+        return out
+
+    graphs.rms_norm = probe
 
     # decoder_layer is a module-level function that PrefillGraph and ExpertGraph
     # look up at call time, so wrapping it measures exactly what the export
@@ -169,9 +192,17 @@ def one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm):
                              key=lambda w: w["top"][0]) for l in range(L)]
         if "expert" in best:        # re-index the kept grid onto the folded layers
             best["expert"] = (best["expert"][0], best["expert"][1] % L, best["expert"][2])
+    # Two residual-stream norms per decoder layer; keep the worse of each pair.
+    for name in STACKS:
+        v = norms[name]
+        n = len(rec[name])
+        if v and n and len(v) % n == 0:
+            per = len(v) // n
+            norms[name] = [max(v[i * per:(i + 1) * per], key=lambda w: w["rel"])
+                           for i in range(n)]
     gc.collect()
     torch.cuda.empty_cache()
-    return rec, inp, best
+    return rec, inp, best, norms
 
 
 def _stacks(torch, arch, graphs, model, dtype, fx, args, rec, inp, note, bucket):
@@ -304,9 +335,10 @@ def capture(args):
                                 if fp16_norm else ""))
         if dtype != torch.bfloat16:
             model = model.to(dtype)
-        rec, inp, best = one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm)
+        rec, inp, best, norms = one_pass(torch, arch, graphs, model, dtype,
+                                         fx, args, fp16_norm)
         passes[tag] = dict(dtype=str(dtype), narrow_norm=fp16_norm, stacks=rec,
-                           inputs=inp,
+                           inputs=inp, norms=norms,
                            surfaces={n: dict(layer=v[1], peak=v[0],
                                              tokens=int(v[2].shape[0]),
                                              channels=int(v[2].shape[1]))
@@ -465,8 +497,74 @@ def plot(args):
     save(fig, "fig_activations", args.out)
 
     # ---- figure B: the token x channel landscape -------------------------
+    rmsnorm_figure(doc, args.out, COLOUR, INK, GREY)
     surfaces(doc, args.out, passes[0])
     report(doc, summary, lim, ceil)
+
+
+def rmsnorm_figure(doc, outdir, COLOUR, INK, GREY):
+    """What the fp16 square actually costs, layer by layer.
+
+    Two fractions on one 0-100% axis:
+      * how many tokens carry a value whose square fp16 cannot hold, measured on
+        the bf16 activations -- the reach of the defect;
+      * how far the fp16 norm's output then lands from the fp32 reference on
+        exactly the same input -- the damage.
+
+    The second is only measurable where the stack goes through graphs.rms_norm,
+    which is the language model and the expert: the code the ONNX export traces.
+    The vision tower runs the HF module's own norms, so only the first curve
+    appears there -- but a3c_decompose_layernorm.py rewrites both LayerNorm and
+    RMSNorm in the exported graph, and both square their input, so the same
+    criterion applies to it.
+    """
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    base = doc["passes"].get("bf16")
+    fp = doc["passes"].get("fp16")
+    if not base:
+        return
+    fig, ax = plt.subplots(1, 3, figsize=(6.9, 1.72), sharey=True,
+                           constrained_layout=True)
+    for i, name in enumerate(STACKS):
+        a = ax[i]
+        rows = base["stacks"].get(name) or []
+        if not rows:
+            a.text(0.5, 0.5, "not captured", ha="center", va="center", fontsize=6.4,
+                   color=GREY, transform=a.transAxes)
+            continue
+        c = COLOUR[name]
+        x = np.arange(len(rows))
+        a.plot(x, [100 * w["rows_over"] for w in rows], "-o", ms=1.9, lw=0.85,
+               color=c, label="tokens fp16 cannot square", zorder=5)
+        nm = (fp or {}).get("norms", {}).get(name) or []
+        if len(nm) == len(rows):
+            a.plot(x, [100 * min(w["rel"], 1.0) for w in nm], "--s", ms=1.7, lw=0.75,
+                   color=INK, alpha=0.85, label="fp16 norm output error", zorder=6)
+        a.set_xlabel("layer", labelpad=1)
+        a.set_xlim(-0.6, len(rows) - 0.4)
+        a.set_ylim(-4, 104)
+        panel(a, "abc"[i], name)
+        a.grid(True, axis="y", lw=0.4, alpha=0.55)
+        a.set_axisbelow(True)
+    ax[0].set_ylabel("% of tokens", labelpad=2)
+
+    fig.canvas.draw()
+    inv = fig.transFigure.inverted()
+    ybot = min(a.get_tightbbox(fig.canvas.get_renderer()).transformed(inv).y0
+               for a in ax)
+    fig.set_layout_engine("none")
+    # Proxy handles: the first series is drawn in each panel's own colour, so a
+    # handle lifted from one panel would claim that colour for all three.
+    from matplotlib.lines import Line2D
+    proxies = [Line2D([], [], color=GREY, marker="o", ms=1.9, lw=0.85),
+               Line2D([], [], color=INK, marker="s", ms=1.7, lw=0.75, ls="--")]
+    labels = ["tokens fp16 cannot square", "fp16 norm output error"]
+    fig.legend(proxies, labels, loc="upper center", bbox_to_anchor=(0.5, ybot - 0.02),
+               ncol=2, fontsize=5.6, handlelength=1.4, handletextpad=0.35,
+               columnspacing=1.2, borderaxespad=0.0, frameon=False)
+    save(fig, "fig_rmsnorm", outdir)
 
 
 def surfaces(doc, outdir, tag):
@@ -571,19 +669,33 @@ def report(doc, summary, lim, ceil):
 
     fp = doc["passes"].get("fp16")
     if fp:
-        print("\nfp16 pass: RMSNorm squares in %s"
-              % ("fp16, as the exported graph does" if fp.get("narrow_norm")
-                 else "fp32, as graphs.rms_norm does -- the defect stays hidden"))
+        print("\nthe residual stream itself")
         for name in STACKS:
             r16 = fp["stacks"].get(name) or []
             r32 = (base or {}).get("stacks", {}).get(name) or []
             if not r16 or len(r16) != len(r32):
                 continue
-            dead = [j for j, w in enumerate(r16) if w.get("bad", 0.0) > 0]
             rel = [abs(b["top"][0] - a["top"][0]) / max(a["top"][0], 1e-9)
                    for a, b in zip(r32, r16)]
-            print("  %-15s first non-finite layer %-4s  max relative gap %.3f"
-                  % (name, dead[0] if dead else "none", max(rel)))
+            print("  %-15s fp16 peak differs from bf16 by at most %.2f%% -- both "
+                  "formats hold these values" % (name, 100 * max(rel)))
+
+        print("\nthe RMSNorm applied to it  (squares in %s)"
+              % ("fp16, as the exported graph does" if fp.get("narrow_norm")
+                 else "fp32, as graphs.rms_norm does -- the defect stays hidden"))
+        for name in STACKS:
+            nm = fp.get("norms", {}).get(name) or []
+            if not nm:
+                print("  %-15s not routed through graphs.rms_norm (HF module's own "
+                      "norms); see the %% column above" % name)
+                continue
+            hit = [j for j, w in enumerate(nm) if w["rows_over"] > 0]
+            worst = max(nm, key=lambda w: w["rel"])
+            print("  %-15s first layer whose input cannot be squared: %s"
+                  % (name, hit[0] if hit else "none"))
+            print("  %-15s worst output error %.1f%% of the reference norm; "
+                  "%.1f%% of tokens came out all-zero"
+                  % ("", 100 * worst["rel"], 100 * worst["zeroed"]))
     print("\n  expert folded to the worst of %d flow steps; 'language model' is the"
           % steps)
     print("  weight set prefill and decode share, so it covers both.")
