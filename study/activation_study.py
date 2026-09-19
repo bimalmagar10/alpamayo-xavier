@@ -564,8 +564,9 @@ def plot(args):
 
             # Both fp16 ceilings: the gap between them is the defect.
             a_.axhline(ceil, color=GREY, lw=0.7, ls=(0, (4, 2)), zorder=2,
-                       label="$65\\,504$")
-            a_.axhline(lim, color=INK, lw=0.9, zorder=4, label="$\\sqrt{65\\,504}$")
+                       label="fp16 max $65\\,504$")
+            a_.axhline(lim, color=INK, lw=0.9, zorder=4,
+                       label="$256=\\sqrt{65\\,504}$")
 
             a_.set_xlim(xin - 1.3, len(rows) - 0.4)
             if r == nrow - 1:
