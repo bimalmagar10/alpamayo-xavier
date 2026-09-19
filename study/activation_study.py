@@ -7,13 +7,22 @@ The question this answers is: which layers of which stack cross that line, by ho
 much, and -- because the fix depends on it -- whether the values that cross sit
 in the same few channels every time.
 
-Two figures, each three panels -- vision tower (27 blocks), language model (36
+Columns are the three stacks -- vision tower (27 blocks), language model (36
 layers, the weights prefill and decode share) and action expert (36 layers):
 
-  fig_activations          the three largest |activations| per layer, against
-                           both fp16 ceilings
+  fig_activations          the three largest |activations| per layer against
+                           both fp16 ceilings, one row per pass
   fig_activation_surface   |x| over tokens x channels at each stack's peak
                            layer, which is where the outlier columns show
+
+Two passes, so the rows can be compared directly:
+
+  bf16   the reference, where every value is representable
+  fp16   every weight and activation cast down, and RMSNorm's square kept in
+         fp16 the way the exported graph computes it. The reference
+         implementation (h100/graphs.py:109) upcasts to fp32 first and so never
+         shows the defect; --upcast-norm reproduces that if you want to see the
+         difference the upcast alone makes. --no-fp16 captures bf16 only.
 
 Nothing in this model comes close to fp16's 65 504 -- the largest value measured
 is 26 240, 40% of it. That is the point: RMSNorm squares before it reduces, so
@@ -66,11 +75,16 @@ def stats(x, k=TOPK):
     a = x.detach().float().abs()
     width = a.shape[-1]
     flat = a.reshape(-1)
+    # An fp16 pass can produce inf or nan. Rank the finite values and report the
+    # rest as a fraction, rather than letting one nan swallow the whole topk.
+    ok = torch.isfinite(flat)
+    bad = float((~ok).float().mean())
+    flat = torch.where(ok, flat, torch.zeros_like(flat))
     top = torch.topk(flat, min(k, flat.numel()))
-    rows = a.reshape(-1, width).amax(dim=1)
+    rows = flat.reshape(-1, width).amax(dim=1)
     return dict(top=[float(v) for v in top.values],
                 chan=[int(i) % width for i in top.indices],
-                width=width,
+                width=width, bad=bad,
                 median=float(flat.median()),
                 frac_over=float((flat > FP16_SQUARE_SAFE).float().mean()),
                 rows_over=float((rows > FP16_SQUARE_SAFE).float().mean()))
@@ -93,32 +107,16 @@ def surface(x, rows=SURF_TOKENS):
 
 
 # ---------------------------------------------------------------------------
-def capture(args):
+def one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm):
+    """Run all three stacks once at `dtype` and return (rec, inputs, grids).
+
+    fp16_norm keeps RMSNorm's square in `dtype` instead of upcasting to fp32.
+    The reference implementation (h100/graphs.py:109) upcasts, and so hides the
+    defect; the exported graph decomposes the norm into Pow/ReduceMean/Sqrt at
+    the engine's precision and does not. Matching the export is the point of
+    the fp16 pass.
+    """
     import gc
-
-    import torch
-    import arch
-    import graphs
-    from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
-
-    gold = os.path.join(args.root, "golden", "inputs.npz")
-    fx = os.path.join(args.root, "fixtures")
-    for p in (gold, os.path.join(fx, "embed_tokens.fp16.npy"), os.path.join(fx, "meta.json")):
-        if not os.path.exists(p):
-            raise SystemExit("missing %s -- run h100/a1_golden.py and h100/a3b_fixtures.py first" % p)
-    if not os.path.isdir(args.model):
-        raise SystemExit("checkpoint not found: %s" % args.model)
-
-    g = np.load(gold, allow_pickle=True)
-    meta = json.load(open(os.path.join(fx, "meta.json")))
-    prefill = int(meta["prefill"])
-    max_seq = int(meta["max_seq"])
-    rope_delta = int(meta.get("rope_deltas", 0))
-    dtype = torch.bfloat16                      # see the module docstring
-
-    print("loading %s in %s" % (args.model, dtype))
-    model = AlpamayoR1.from_pretrained(args.model, dtype=dtype).to("cuda").eval()
-    lm = model.vlm.model.language_model
 
     rec = {k: [] for k in STACKS}
     inp, best = {}, {}
@@ -129,6 +127,14 @@ def capture(args):
         rec[name].append(st)
         if st["top"][0] > best.get(name, (0.0,))[0]:
             best[name] = (st["top"][0], len(rec[name]) - 1, surface(x))
+
+    real_norm = graphs.rms_norm
+    if fp16_norm:
+        def narrow_norm(x, weight, eps):
+            v = x                                     # no fp32 upcast
+            v = v * torch.rsqrt(v.pow(2).mean(-1, keepdim=True) + eps)
+            return (v * weight).to(x.dtype)
+        graphs.rms_norm = narrow_norm
 
     # decoder_layer is a module-level function that PrefillGraph and ExpertGraph
     # look up at call time, so wrapping it measures exactly what the export
@@ -147,11 +153,36 @@ def capture(args):
         return out
 
     graphs.decoder_layer = wrapped
+    try:
+        _stacks(torch, arch, graphs, model, dtype, fx, args, rec, inp, note, bucket)
+    finally:
+        graphs.decoder_layer = real_layer
+        graphs.rms_norm = real_norm
+
+    # Fold the flow steps down to the worst step per layer, so the expert
+    # subplot shows the largest value that layer ever has to represent.
+    L = arch.EXPERT["layers"]
+    flat = rec["expert"]
+    if flat:
+        nsteps = max(1, len(flat) // L)
+        rec["expert"] = [max((flat[s * L + l] for s in range(nsteps)),
+                             key=lambda w: w["top"][0]) for l in range(L)]
+        if "expert" in best:        # re-index the kept grid onto the folded layers
+            best["expert"] = (best["expert"][0], best["expert"][1] % L, best["expert"][2])
+    gc.collect()
+    torch.cuda.empty_cache()
+    return rec, inp, best
+
+
+def _stacks(torch, arch, graphs, model, dtype, fx, args, rec, inp, note, bucket):
+    """Drive vision, then prefill, then the expert, on the inputs in `fx`."""
+    import gc
+
+    prefill, max_seq = fx["prefill"], fx["max_seq"]
 
     # ---- 1. vision tower -------------------------------------------------
     # The ViT blocks are called as modules, so ordinary hooks do fire.
-    px = torch.tensor(g["pixel_values"], device="cuda", dtype=dtype)
-    grid = torch.tensor(g["image_grid_thw"], dtype=torch.long, device="cuda")
+    px = fx["pixel_values"].to(dtype)
     unwrap = lambda o: o[0] if isinstance(o, (tuple, list)) else o
     blocks = model.vlm.model.visual.blocks
     hooks = [blocks[0].register_forward_pre_hook(
@@ -159,22 +190,19 @@ def capture(args):
     hooks += [b.register_forward_hook(
         lambda m, i, o: note("vision", unwrap(o), stats(unwrap(o)))) for b in blocks]
     with torch.no_grad():
-        vout = graphs.VisionGraph(model.vlm.model.visual, grid).eval()(px)
+        vout = graphs.VisionGraph(model.vlm.model.visual, fx["grid"]).eval()(px)
     for h in hooks:
         h.remove()
     if not isinstance(vout, tuple):
         raise SystemExit("vision tower returned no DeepStack maps -- cannot drive prefill")
     visual, ds = vout[0], vout[1:]
-    print("vision         : %2d blocks, embeds %s" % (len(rec["vision"]), tuple(visual.shape)))
+    print("  vision         : %2d blocks, embeds %s"
+          % (len(rec["vision"]), tuple(visual.shape)))
 
     # ---- 2. language model, over the real prompt -------------------------
-    embed = np.load(os.path.join(fx, "embed_tokens.fp16.npy"), mmap_mode="r")
-    ids = np.load(os.path.join(fx, "input_ids.npy")).reshape(-1)[:prefill]
-    vmask = torch.from_numpy(np.load(os.path.join(fx, "visual_mask.npy"))[:prefill]).cuda()
-    pos = torch.from_numpy(np.load(os.path.join(fx, "position_ids.npy"))[:, :prefill])
-    cos, sin = (t.cuda() for t in graphs.rope_tables(pos.reshape(3, 1, -1), dtype=dtype))
-
-    embeds = torch.from_numpy(np.ascontiguousarray(embed[ids])).to("cuda", dtype)[None]
+    cos, sin = (t.cuda() for t in graphs.rope_tables(fx["pos"], dtype=dtype))
+    vmask = fx["vmask"]
+    embeds = fx["embeds"].to(dtype).clone()
     n_vis = int(vmask.sum())
     embeds[0, vmask] = visual[:n_vis].to(dtype)
     ds_full = []
@@ -187,12 +215,13 @@ def capture(args):
     torch.cuda.empty_cache()
 
     bucket["name"] = "language model"
-    pf = graphs.PrefillGraph(lm, model.vlm.lm_head, prefill, dtype).cuda().eval()
+    pf = graphs.PrefillGraph(model.vlm.model.language_model, model.vlm.lm_head,
+                             prefill, dtype).cuda().eval()
     with torch.no_grad():
         out = pf(embeds, cos, sin, *ds_full)
     bucket["name"] = None
     k_cache, v_cache = out[2], out[3]
-    print("language model : %2d layers, %d prompt positions"
+    print("  language model : %2d layers, %d prompt positions"
           % (len(rec["language model"]), prefill))
 
     # ---- 3. action expert, over the cache prefill just wrote -------------
@@ -204,13 +233,11 @@ def capture(args):
     past_v = torch.zeros_like(past_k)
     past_k[:, :, :, :prefill] = k_cache.to(dtype)
     past_v[:, :, :, :prefill] = v_cache.to(dtype)
-    del out, k_cache, v_cache, embeds, ds_full
+    del out, k_cache, v_cache, embeds, ds_full, pf
     gc.collect()
     torch.cuda.empty_cache()
 
-    wpos = np.broadcast_to(np.arange(W) + prefill + rope_delta, (3, W))
-    wcos, wsin = (t.cuda() for t in graphs.rope_tables(
-        torch.from_numpy(wpos.copy()).reshape(3, 1, -1), dtype=dtype))
+    wcos, wsin = (t.cuda() for t in graphs.rope_tables(fx["wpos"], dtype=dtype))
     emask = torch.full((1, 1, W, max_seq + W), torch.finfo(dtype).min,
                        device="cuda", dtype=dtype)
     emask[..., :prefill] = 0.0
@@ -227,36 +254,81 @@ def capture(args):
             t = torch.full((1, 1, 1), float(ts[i]), device="cuda", dtype=dtype)
             x = x + float(ts[i + 1] - ts[i]) * ex(x, t, wcos, wsin, past_k, past_v, emask)
     bucket["name"] = None
-    graphs.decoder_layer = real_layer
+    print("  expert         : %2d layers, %d waypoints, worst of %d flow steps"
+          % (len(rec["expert"]) // max(1, len(rec["expert"]) // L), W, STEPS))
 
-    # Fold the 10 flow steps down to the worst step per layer, so the expert
-    # subplot shows the largest value that layer ever has to represent.
-    flat = rec["expert"]
-    nsteps = len(flat) // L
-    rec["expert"] = [max((flat[s * L + l] for s in range(nsteps)),
-                         key=lambda w: w["top"][0]) for l in range(L)]
-    if "expert" in best:            # re-index the kept grid onto the folded layers
-        best["expert"] = (best["expert"][0], best["expert"][1] % L, best["expert"][2])
-    print("expert         : %2d layers, %d waypoints, worst of %d flow steps"
-          % (len(rec["expert"]), W, STEPS))
+
+def capture(args):
+    import torch
+    import arch
+    import graphs
+    from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+
+    gold = os.path.join(args.root, "golden", "inputs.npz")
+    fxdir = os.path.join(args.root, "fixtures")
+    for p in (gold, os.path.join(fxdir, "embed_tokens.fp16.npy"),
+              os.path.join(fxdir, "meta.json")):
+        if not os.path.exists(p):
+            raise SystemExit("missing %s -- run h100/a1_golden.py and "
+                             "h100/a3b_fixtures.py first" % p)
+    if not os.path.isdir(args.model):
+        raise SystemExit("checkpoint not found: %s" % args.model)
+
+    g = np.load(gold, allow_pickle=True)
+    meta = json.load(open(os.path.join(fxdir, "meta.json")))
+    prefill, max_seq = int(meta["prefill"]), int(meta["max_seq"])
+    rope_delta = int(meta.get("rope_deltas", 0))
+    W = arch.N_WAYPOINTS
+
+    load = lambda n: np.load(os.path.join(fxdir, n))
+    embed = np.load(os.path.join(fxdir, "embed_tokens.fp16.npy"), mmap_mode="r")
+    ids = load("input_ids.npy").reshape(-1)[:prefill]
+    wpos = np.broadcast_to(np.arange(W) + prefill + rope_delta, (3, W)).copy()
+    fx = dict(prefill=prefill, max_seq=max_seq,
+              pixel_values=torch.tensor(g["pixel_values"], device="cuda"),
+              grid=torch.tensor(g["image_grid_thw"], dtype=torch.long, device="cuda"),
+              vmask=torch.from_numpy(load("visual_mask.npy")[:prefill]).cuda(),
+              pos=torch.from_numpy(load("position_ids.npy")[:, :prefill]).reshape(3, 1, -1),
+              wpos=torch.from_numpy(wpos).reshape(3, 1, -1),
+              embeds=torch.from_numpy(np.ascontiguousarray(embed[ids])).cuda()[None])
+
+    print("loading %s" % args.model)
+    model = AlpamayoR1.from_pretrained(args.model, dtype=torch.bfloat16).to("cuda").eval()
+
+    passes, grids = {}, {}
+    plan = [("bf16", torch.bfloat16, False)]
+    if not args.no_fp16:
+        plan.append(("fp16", torch.float16, not args.upcast_norm))
+    for tag, dtype, fp16_norm in plan:
+        print("\n%s pass%s" % (tag, "  (RMSNorm squares in %s, as the export does)" % tag
+                                if fp16_norm else ""))
+        if dtype != torch.bfloat16:
+            model = model.to(dtype)
+        rec, inp, best = one_pass(torch, arch, graphs, model, dtype, fx, args, fp16_norm)
+        passes[tag] = dict(dtype=str(dtype), narrow_norm=fp16_norm, stacks=rec,
+                           inputs=inp,
+                           surfaces={n: dict(layer=v[1], peak=v[0],
+                                             tokens=int(v[2].shape[0]),
+                                             channels=int(v[2].shape[1]))
+                                     for n, v in best.items()})
+        grids.update({"surf_%s_%s" % (tag, n.replace(" ", "_")): v[2]
+                      for n, v in best.items()})
 
     os.makedirs(args.out, exist_ok=True)
-    doc = dict(dtype=str(dtype), prefill=prefill, max_seq=max_seq, flow_steps=STEPS,
+    doc = dict(prefill=prefill, max_seq=max_seq, flow_steps=arch.FLOW_STEPS,
                fp16_max=FP16_MAX, fp16_square_safe=FP16_SQUARE_SAFE, topk=TOPK,
-               gpu=torch.cuda.get_device_name(0), stacks=rec, inputs=inp,
-               note="bf16 capture: fp16 is the precision under test, measuring in "
-                    "it would hide the overflow. Expert folded to the worst of "
-                    "%d flow steps. 'language model' is the weight set prefill "
-                    "and decode share." % STEPS)
-    doc["surfaces"] = {n: dict(layer=v[1], peak=v[0], tokens=int(v[2].shape[0]),
-                               channels=int(v[2].shape[1]))
-                       for n, v in best.items()}
+               gpu=torch.cuda.get_device_name(0), passes=passes,
+               note="bf16 is the reference. The fp16 pass casts every weight and "
+                    "activation and, unless --upcast-norm, keeps RMSNorm's square "
+                    "in fp16 the way the exported graph does -- graphs.rms_norm "
+                    "upcasts to fp32 and would hide the defect. Expert folded to "
+                    "the worst of %d flow steps; 'language model' is the weight "
+                    "set prefill and decode share." % arch.FLOW_STEPS)
     path = os.path.join(args.out, "activation_study.json")
     with open(path, "w") as f:
         json.dump(doc, f, indent=1)
     npz = os.path.join(args.out, "activation_study.npz")
-    np.savez_compressed(npz, **{"surf_%s" % n.replace(" ", "_"): v[2]
-                                for n, v in best.items()})
+    np.savez_compressed(npz, **grids)
     print("\nwrote %s" % path)
     print("wrote %s  (%.1f MB)" % (npz, os.path.getsize(npz) / 1e6))
     return doc
@@ -288,9 +360,7 @@ def plot(args):
         sys.path.insert(0, os.path.join(REPO, "analysis"))
         from alpamayo_figs import style
         style.use_style()
-        MUTED = style.C["muted"]
     except Exception:
-        MUTED = "#6B7780"
         matplotlib.rcParams.update({"font.size": 8, "figure.dpi": 150,
                                     "font.family": "serif", "savefig.dpi": 600,
                                     "savefig.bbox": "tight",
@@ -298,13 +368,16 @@ def plot(args):
     # Okabe-Ito for the data, neutral ink for the two fp16 rules: distinguishable
     # in greyscale and under every common form of colour blindness.
     SERIES = ("#0072B2", "#D55E00", "#009E73")
-    INK, GREY = "#1A1A1A", "#9099A1"
+    INK, GREY, BAD = "#1A1A1A", "#9099A1", "#CC3311"
 
     path = os.path.join(args.out, "activation_study.json")
     if not os.path.exists(path):
         raise SystemExit("no %s -- run the capture stage on the H100 first" % path)
     doc = json.load(open(path))
     lim, ceil, k = doc["fp16_square_safe"], doc["fp16_max"], doc["topk"]
+    passes = [t for t in ("bf16", "fp16") if t in doc.get("passes", {})]
+    if not passes:
+        raise SystemExit("%s holds no passes -- re-run the capture stage" % path)
     COLOUR = dict(zip(STACKS, SERIES))
     TITLE = {"vision": "vision tower, %d blocks",
              "language model": "language model, %d layers",
@@ -312,77 +385,91 @@ def plot(args):
     RANK = [("largest", "-o", 1.9, 0.85, 1.00), ("2nd", "--s", 1.7, 0.75, 0.70),
             ("3rd", ":^", 1.5, 0.70, 0.48)]
 
-    def grid(ax, axis="y"):
-        ax.grid(True, axis=axis, lw=0.4, alpha=0.55)
-        ax.set_axisbelow(True)
+    nrow = len(passes)
+    fig, ax = plt.subplots(nrow, 3, figsize=(6.9, 1.55 * nrow + 0.30), sharey=True,
+                           sharex="col", constrained_layout=True, squeeze=False)
+    summary, floor, any_bad = [], [], False
+    for r, tag in enumerate(passes):
+        pas = doc["passes"][tag]
+        for i, name in enumerate(STACKS):
+            a_ = ax[r][i]
+            rows = pas["stacks"].get(name) or []
+            if not rows:
+                a_.text(0.5, 0.5, "not captured", ha="center", va="center",
+                        fontsize=6.4, color=GREY, transform=a_.transAxes)
+                continue
+            c = COLOUR[name]
+            x = np.arange(len(rows))
+            entry = pas.get("inputs", {}).get(name)
+            xin = -max(2.4, 0.10 * len(rows))     # far enough left of tick 0 to read
+            for j, (lab, mk, ms, lw, al) in enumerate(RANK[:k]):
+                y = [w["top"][j] if len(w["top"]) > j else np.nan for w in rows]
+                a_.semilogy(x, y, mk, ms=ms, lw=lw, color=c, alpha=al, label=lab,
+                            zorder=6 - j)
+                if entry:                          # the stream entering layer 0
+                    a_.semilogy([xin], [entry["top"][j]], mk[-1], ms=ms, color=c,
+                                alpha=al, zorder=6 - j)
+            a_.semilogy(x, [w["median"] for w in rows], "-", color=GREY, lw=0.8,
+                        label="median", zorder=3)
+            if entry:
+                a_.axvline(xin / 2.0, color=GREY, lw=0.5, ls=":", zorder=1)
 
-    # ---- figure A: magnitude with depth ----------------------------------
-    fig, ax = plt.subplots(1, 3, figsize=(6.9, 1.72), constrained_layout=True,
-                           sharey=True)
-    summary = []
-    for i, name in enumerate(STACKS):
-        a = ax[i]
-        rows = doc["stacks"].get(name) or []
-        if not rows:
-            a.text(0.5, 0.5, "not captured", ha="center", va="center", fontsize=6.4,
-                   color=MUTED, transform=a.transAxes)
-            a.set_yticks([])
-            panel(a, "abc"[i], TITLE[name].split(",")[0])
-            continue
-        c = COLOUR[name]
-        x = np.arange(len(rows))
-        entry = doc.get("inputs", {}).get(name)
-        xin = -max(2.4, 0.10 * len(rows))         # far enough left of tick 0 to read
-        for r, (lab, mk, ms, lw, al) in enumerate(RANK[:k]):
-            y = [w["top"][r] if len(w["top"]) > r else np.nan for w in rows]
-            a.semilogy(x, y, mk, ms=ms, lw=lw, color=c, alpha=al, label=lab,
-                       zorder=6 - r)
-            if entry:                                 # the stream entering layer 0
-                a.semilogy([xin], [entry["top"][r]], mk[-1], ms=ms, color=c,
-                           alpha=al, zorder=6 - r)
-        a.semilogy(x, [w["median"] for w in rows], "-", color=GREY, lw=0.8,
-                   label="median", zorder=3)
-        if entry:
-            a.axvline(xin / 2.0, color=GREY, lw=0.5, ls=":", zorder=1)
+            # Layers the pass could not represent at all.
+            nf = [j for j, w in enumerate(rows) if w.get("bad", 0.0) > 0]
+            if nf:
+                any_bad = True
+                a_.semilogy(nf, [rows[j]["top"][0] or lim for j in nf], "x",
+                            ms=3.0, mew=0.9, color=BAD, label="inf or nan", zorder=8)
 
-        # Both fp16 ceilings: the gap between them is the defect.
-        a.axhline(ceil, color=GREY, lw=0.7, ls=(0, (4, 2)), zorder=2,
-                  label="$65\\,504$")
-        a.axhline(lim, color=INK, lw=0.9, zorder=4, label="$\\sqrt{65\\,504}$")
+            # Both fp16 ceilings: the gap between them is the defect.
+            a_.axhline(ceil, color=GREY, lw=0.7, ls=(0, (4, 2)), zorder=2,
+                       label="$65\\,504$")
+            a_.axhline(lim, color=INK, lw=0.9, zorder=4, label="$\\sqrt{65\\,504}$")
 
-        a.set_xlabel("layer", labelpad=1)
-        a.set_xlim(xin - 1.3, len(rows) - 0.4)
-        ticks = [t for t in a.get_xticks() if 0 <= t <= len(rows) - 1]
-        a.set_xticks([xin] + list(ticks))
-        a.set_xticklabels(["in"] + ["%d" % t for t in ticks])
-        panel(a, "abc"[i], TITLE[name] % len(rows))
-        grid(a)
-        top1 = np.array([w["top"][0] for w in rows])
-        summary.append((name, rows, entry, top1, np.nonzero(top1 > lim)[0]))
+            a_.set_xlim(xin - 1.3, len(rows) - 0.4)
+            if r == nrow - 1:
+                a_.set_xlabel("layer", labelpad=1)
+                ticks = [t for t in a_.get_xticks() if 0 <= t <= len(rows) - 1]
+                a_.set_xticks([xin] + list(ticks))
+                a_.set_xticklabels(["in"] + ["%d" % t for t in ticks])
+            if r == 0:
+                panel(a_, "abc"[i], TITLE[name] % len(rows))
+            a_.grid(True, axis="y", lw=0.4, alpha=0.55)
+            a_.set_axisbelow(True)
+            floor += [w["median"] for w in rows if w["median"] > 0]
+            summary.append((tag, name, rows, entry,
+                            np.array([w["top"][0] for w in rows])))
+        ax[r][0].set_ylabel("%s      $|x|$" % tag, labelpad=2)
 
-    ax[0].set_ylabel("$|x|$ in the residual stream")
-    ax[0].set_ylim(top=ceil * 3.0)
-    ax[0].yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10.0, numticks=15))
+    ax[0][0].set_ylim(top=ceil * 3.0, bottom=min(floor) * 0.25 if floor else None)
+    ax[0][0].yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10.0, numticks=15))
+
     # One row of bare labels under the panels, anchored against a measured
     # position: an "outside" legend is owned by the layout engine, which re-runs
     # inside savefig and moves it afterwards.
     fig.canvas.draw()
     inv = fig.transFigure.inverted()
-    ybot = min(a.get_tightbbox(fig.canvas.get_renderer()).transformed(inv).y0
-               for a in ax)
+    ybot = min(a_.get_tightbbox(fig.canvas.get_renderer()).transformed(inv).y0
+               for a_ in ax[-1])
     fig.set_layout_engine("none")                 # freeze the panels where they are
-    h, l = ax[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, ybot - 0.025),
-               ncol=len(h), fontsize=5.6, handlelength=1.4, handletextpad=0.35,
+    h, l = ax[-1][0].get_legend_handles_labels()
+    seen, hh, ll = set(), [], []
+    for handle, label in zip(h, l):               # one entry each, order preserved
+        if label not in seen:
+            seen.add(label)
+            hh.append(handle)
+            ll.append(label)
+    fig.legend(hh, ll, loc="upper center", bbox_to_anchor=(0.5, ybot - 0.02),
+               ncol=len(hh), fontsize=5.6, handlelength=1.4, handletextpad=0.35,
                columnspacing=1.1, borderaxespad=0.0, frameon=False)
     save(fig, "fig_activations", args.out)
 
     # ---- figure B: the token x channel landscape -------------------------
-    surfaces(doc, args.out)
-    report(summary, lim, ceil, doc.get("flow_steps", 10))
+    surfaces(doc, args.out, passes[0])
+    report(doc, summary, lim, ceil)
 
 
-def surfaces(doc, outdir):
+def surfaces(doc, outdir, tag):
     """|x| over tokens x channels at each stack's peak layer.
 
     The 3D view is PrefixQuant's plot_3D_tensor (Chen et al.,
@@ -399,18 +486,18 @@ def surfaces(doc, outdir):
         print("\nno %s -- re-run the capture stage for the 3D view" % npz)
         return
     z = np.load(npz)
-    got = [n for n in STACKS if "surf_%s" % n.replace(" ", "_") in z.files]
-    if not got:
+    key = lambda n: "surf_%s_%s" % (tag, n.replace(" ", "_"))
+    if not any(key(n) in z.files for n in STACKS):
+        print("\nno %s grids in %s -- re-run the capture stage" % (tag, npz))
         return
 
     fig = plt.figure(figsize=(6.9, 1.95), constrained_layout=True)
     for i, name in enumerate(STACKS):
         a = fig.add_subplot(1, 3, i + 1, projection="3d")
-        key = "surf_%s" % name.replace(" ", "_")
-        if key not in z.files:
+        if key(name) not in z.files:
             a.set_axis_off()
             continue
-        g = z[key].astype(np.float32)
+        g = np.nan_to_num(z[key(name)].astype(np.float32), posinf=0.0, neginf=0.0)
         if g.shape[0] > SURF_PLOT_ROWS:               # keep every channel; thin tokens
             g = g[np.linspace(0, g.shape[0] - 1, SURF_PLOT_ROWS).astype(int)]
         X, Y = np.meshgrid(np.arange(g.shape[1]), np.arange(g.shape[0]))
@@ -421,7 +508,7 @@ def surfaces(doc, outdir):
             a.set_box_aspect((4, 4, 2.6), zoom=1.38)
         except TypeError:         # matplotlib < 3.6 has no zoom
             a.set_box_aspect((4, 4, 2.6))
-        meta = doc.get("surfaces", {}).get(name, {})
+        meta = doc["passes"][tag].get("surfaces", {}).get(name, {})
         a.set_title("(%s) %s, layer %s"
                     % ("abc"[i], name, meta.get("layer", "?")), loc="left",
                     pad=-16, fontsize=7.2)
@@ -442,51 +529,64 @@ def _fmt(v):
     return format(int(round(v)), ",d").replace(",", "\u2009") if v >= 100 else "%.1f" % v
 
 
-def report(summary, lim, ceil, steps):
+def report(doc, summary, lim, ceil):
     """The audit trail, in the same shape vision_study.py prints."""
+    steps = doc.get("flow_steps", 10)
     print("\nwhat the capture recorded")
-    print("  %-15s %10s %6s %10s   %s"
-          % ("stack", "peak |x|", "layer", "median", "verdict"))
-    for name, rows, entry, top1, over in summary:
+    print("  %-6s %-15s %10s %6s %10s %9s   %s"
+          % ("pass", "stack", "peak |x|", "layer", "median", "non-finite", "verdict"))
+    for tag, name, rows, entry, top1 in summary:
         i = int(np.argmax(top1))
-        print("  %-15s %10.1f %6d %10.3f   %s"
-              % (name, top1[i], i, rows[i]["median"],
+        over = np.nonzero(top1 > lim)[0]
+        bad = max(w.get("bad", 0.0) for w in rows)
+        print("  %-6s %-15s %10.1f %6d %10.3f %8.2f%%   %s"
+              % (tag, name, top1[i], i, rows[i]["median"], 100 * bad,
                  "%d of %d layers over %.0f" % (len(over), len(rows), lim)
                  if over.size else "stays under %.0f" % lim))
-    for name, rows, entry, top1, over in summary:
-        print("\n%s" % name)
-        if entry:
-            print("  entering layer 0   max %.1f, median %.3f"
-                  % (entry["top"][0], entry["median"]))
-        if over.size:
-            f = rows[over[0]]
-            print("  first crossing     layer %d, |x| = %.1f in channel %d of %d"
-                  % (over[0], f["top"][0], f["chan"][0], f["width"]))
-            print("  at that layer      %.4f%% of values and %.2f%% of tokens are over"
-                  % (100 * f["frac_over"], 100 * f["rows_over"]))
-        chans = [w["chan"][0] for w in rows]
-        common = max(set(chans), key=chans.count)
-        print("  top channel        %d holds the largest value in %d of %d layers"
-              % (common, chans.count(common), len(chans)))
-        seen = sorted({c for w in rows for c in w["chan"]})
-        print("  top-3 ever land in %d distinct channels of %d: %s"
-              % (len(seen), rows[0]["width"],
-                 ", ".join(str(c) for c in seen[:8]) + (" ..." if len(seen) > 8 else "")))
-    print("\n  expert folded to the worst of %d flow steps; 'language model' is the"
-          % steps)
-    print("  weight set prefill and decode share, so it covers both.")
+
+    base = doc["passes"].get("bf16")
+    if base:
+        print("\nwhere the large values sit  (bf16)")
+        for name in STACKS:
+            rows = base["stacks"].get(name) or []
+            if not rows:
+                continue
+            chans = [w["chan"][0] for w in rows]
+            common = max(set(chans), key=chans.count)
+            seen = sorted({c for w in rows for c in w["chan"]})
+            print("  %-15s channel %-5d holds the largest value in %2d of %2d layers; "
+                  "top-3 ever land in %d of %d channels"
+                  % (name, common, chans.count(common), len(chans), len(seen),
+                     rows[0]["width"]))
+
     print("\nwhy the line is at %.0f and not at %.0f" % (lim, ceil))
-    for name, rows, entry, top1, over in summary:
+    for tag, name, rows, entry, top1 in summary:
+        if tag != "bf16":
+            continue
         pk = float(top1.max())
-        print("  %-15s peak %9s = %4.1f%% of fp16 max, but x^2 = %8.2e, %6.0fx over"
+        print("  %-15s peak %9s = %4.1f%% of fp16 max, but x^2 = %8.2e, %7.0fx over"
               % (name, _fmt(pk), 100 * pk / ceil, pk ** 2, pk ** 2 / ceil))
     print("  RMSNorm computes mean(x^2) before it reduces, so Pow(2) is the node")
     print("  that overflows -- the values themselves were never the problem.")
-    print("\n  A handful of channels carrying every large value is the per-channel")
-    print("  case: one scale per column keeps them, one scale per tensor spends its")
-    print("  whole range on them. It is also why the fp16 RMSNorm fix works --")
-    print("  rescaling by the row max moves those columns back under %.0f without" % lim)
-    print("  touching the ratio the norm actually depends on.")
+
+    fp = doc["passes"].get("fp16")
+    if fp:
+        print("\nfp16 pass: RMSNorm squares in %s"
+              % ("fp16, as the exported graph does" if fp.get("narrow_norm")
+                 else "fp32, as graphs.rms_norm does -- the defect stays hidden"))
+        for name in STACKS:
+            r16 = fp["stacks"].get(name) or []
+            r32 = (base or {}).get("stacks", {}).get(name) or []
+            if not r16 or len(r16) != len(r32):
+                continue
+            dead = [j for j, w in enumerate(r16) if w.get("bad", 0.0) > 0]
+            rel = [abs(b["top"][0] - a["top"][0]) / max(a["top"][0], 1e-9)
+                   for a, b in zip(r32, r16)]
+            print("  %-15s first non-finite layer %-4s  max relative gap %.3f"
+                  % (name, dead[0] if dead else "none", max(rel)))
+    print("\n  expert folded to the worst of %d flow steps; 'language model' is the"
+          % steps)
+    print("  weight set prefill and decode share, so it covers both.")
 
 
 def main():
@@ -496,6 +596,11 @@ def main():
     ap.add_argument("--root", default=os.environ.get("ALPAMAYO_ROOT", ""))
     ap.add_argument("--out", default=os.path.join(HERE, "out"))
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-fp16", action="store_true",
+                    help="capture the bf16 reference only")
+    ap.add_argument("--upcast-norm", action="store_true",
+                    help="let the fp16 pass keep graphs.rms_norm's fp32 upcast; "
+                         "the reference does, the exported graph does not")
     args = ap.parse_args()
     if args.stage in ("all", "capture"):
         if not args.model or not args.root:
