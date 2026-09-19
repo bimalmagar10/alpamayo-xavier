@@ -220,6 +220,22 @@ def capture(args):
 
 
 # ---------------------------------------------------------------------------
+def panel(ax, letter, title):
+    """(a) + a neutral description, as in vision_study.py. Findings go in
+    data-driven annotations, never in the title, so the figure cannot assert
+    something the run did not show."""
+    ax.set_title("(%s) %s" % (letter, title), loc="left", pad=3, fontsize=7.2)
+
+
+def save(fig, name, outdir):
+    import matplotlib.pyplot as plt
+    for ext in ("pdf", "png"):
+        path = os.path.join(outdir, "%s.%s" % (name, ext))
+        fig.savefig(path)
+        print("wrote %s" % path)
+    plt.close(fig)
+
+
 def plot(args):
     import matplotlib
     matplotlib.use("Agg")
@@ -236,121 +252,135 @@ def plot(args):
                                     "font.family": "serif", "savefig.dpi": 600,
                                     "savefig.bbox": "tight",
                                     "axes.spines.top": False, "axes.spines.right": False})
-    FAULT, OK = "#A32318", "#256B3C"
+    BLUE, RUST, TEAL, PLUM, FAULT = "#1F4E79", "#7A2E23", "#0B6B63", "#473C6B", "#A32318"
 
     path = os.path.join(args.out, "activation_study.json")
     if not os.path.exists(path):
         raise SystemExit("no %s -- run the capture stage on the H100 first" % path)
     doc = json.load(open(path))
     lim, k = doc["fp16_square_safe"], doc["topk"]
-    colour = {"vision": "#0B6B63", "language model": "#1D3F6B", "expert": "#473C6B"}
-    RANK = ["largest", "2nd", "3rd"]
-    MARK = ["-o", "--s", ":^"]
-    SUB = {"vision": "%d ViT blocks",
-           "language model": "%d layers, shared by prefill and decode",
-           "expert": "%d layers, worst of " + str(doc.get("flow_steps", 10)) + " flow steps"}
+    steps = doc.get("flow_steps", 10)
+    COLOUR = {"vision": TEAL, "language model": BLUE, "expert": PLUM}
+    TITLE = {"vision": "vision tower, %d blocks",
+             "language model": "language model, %d layers",
+             "expert": "action expert, %d layers"}
+    RANK = [("largest", "-o", 2.2, 0.95, 1.00), ("2nd", "--s", 1.9, 0.85, 0.72),
+            ("3rd", ":^", 1.7, 0.80, 0.50)]
 
-    fig, axes = plt.subplots(1, 3, figsize=(7.1, 2.15), constrained_layout=True,
-                             sharey=True)
-    summary = []
-    for ax, name in zip(axes, STACKS):
+    def grid(ax, axis="y"):
+        ax.grid(True, axis=axis, lw=0.4, alpha=0.55)
+        ax.set_axisbelow(True)
+
+    fig, ax = plt.subplots(1, 3, figsize=(7.1, 2.05), constrained_layout=True,
+                           sharey=True)
+    summary, peaks = [], {}
+    for i, name in enumerate(STACKS):
+        a = ax[i]
         rows = doc["stacks"].get(name) or []
         if not rows:
-            ax.text(0.5, 0.5, "not captured", ha="center", va="center", fontsize=7,
-                    transform=ax.transAxes, color=MUTED)
-            ax.set_xticks([])
+            a.text(0.5, 0.5, "not captured", ha="center", va="center", fontsize=6.4,
+                   color=MUTED, transform=a.transAxes)
+            a.set_yticks([])
+            panel(a, "abc"[i], TITLE[name].split(",")[0])
             continue
-        c = colour[name]
+        c = COLOUR[name]
         x = np.arange(len(rows))
         entry = doc.get("inputs", {}).get(name)
-        for r in range(k):
+        xin = -max(2.4, 0.10 * len(rows))         # far enough left of tick 0 to read
+        for r, (lab, mk, ms, lw, al) in enumerate(RANK[:k]):
             y = [w["top"][r] if len(w["top"]) > r else np.nan for w in rows]
-            ax.semilogy(x, y, MARK[r], color=c, ms=2.2, lw=0.9, mew=0.6,
-                        alpha=1.0 - 0.3 * r, label=RANK[r], zorder=6 - r)
+            a.semilogy(x, y, mk, ms=ms, lw=lw, color=c, alpha=al, label=lab,
+                       zorder=6 - r)
             if entry:                                 # the stream entering layer 0
-                ax.semilogy([-1.4], [entry["top"][r]], MARK[r][-1], color=c, ms=2.2,
-                            mew=0.6, alpha=1.0 - 0.3 * r, zorder=6 - r)
-        ax.semilogy(x, [w["median"] for w in rows], "-", color=MUTED, lw=0.8,
-                    label="median $|x|$", zorder=2)
+                a.semilogy([xin], [entry["top"][r]], mk[-1], ms=ms, color=c,
+                           alpha=al, zorder=6 - r)
+        a.semilogy(x, [w["median"] for w in rows], "-", color=MUTED, lw=0.9,
+                   label="median $|x|$", zorder=3)
         if entry:
-            ax.axvline(-0.7, color=MUTED, lw=0.5, ls=":", zorder=1)
+            a.axvline(xin / 2.0, color=MUTED, lw=0.6, ls=":", zorder=1)
 
-        ax.axhline(lim, color=FAULT, lw=1.0, zorder=3,
-                   label="$\\sqrt{65\\,504}=256$, the largest $x$ whose square fp16 holds")
-        ax.axhline(doc["fp16_max"], color=FAULT, lw=0.8, ls=(0, (4, 2)), zorder=3,
-                   label="fp16 max, $65\\,504$")
+        a.axhline(lim, color=FAULT, lw=1.0, zorder=4)
+        a.annotate("$\\sqrt{65\\,504}$", xy=(xin - 0.4, lim), xytext=(2, 3),
+                   textcoords="offset points", fontsize=5.7, color=FAULT,
+                   ha="left", va="bottom")
 
+        # One annotation per panel, at the peak: the magnitude, the channel it
+        # sits in -- the reason per-channel scaling survives where per-tensor
+        # does not -- and whether the stack ever crosses the line.
         top1 = np.array([w["top"][0] for w in rows])
         over = np.nonzero(top1 > lim)[0]
-        ax.set_title("%s\n%s" % (name, SUB[name] % len(rows)), loc="left", pad=3,
-                     fontsize=7.0, linespacing=1.4)
-        ax.set_xlabel("layer", labelpad=1.5)
-        ax.set_xlim(-2.2, len(rows) - 0.5)
-        ax.text(0.035, 0.035,
-                ("crosses at layer %d \u2014 %d of %d layers over"
-                 % (over[0], len(over), len(rows)))
-                if over.size else "never reaches the line",
-                transform=ax.transAxes, fontsize=5.8, ha="left", va="bottom",
-                color=FAULT if over.size else OK)
-        ax.grid(True, axis="y", lw=0.4, alpha=0.55)
-        ax.set_axisbelow(True)
+        j = int(np.argmax(top1))
+        a.annotate("peak %s at layer %d,\nin channel %d of %d\n%s"
+                   % (_fmt(top1[j]), j, rows[j]["chan"][0], rows[j]["width"],
+                      "crossed at layer %d, %d of %d over"
+                      % (over[0], len(over), len(rows)) if over.size
+                      else "never crossed"),
+                   xy=(0.03, 0.97), xycoords="axes fraction", fontsize=5.6,
+                   color=c, ha="left", va="top")
+
+        a.set_xlabel("layer")
+        a.set_xlim(xin - 1.3, len(rows) - 0.4)
+        ticks = [t for t in a.get_xticks() if 0 <= t <= len(rows) - 1]
+        a.set_xticks([xin] + list(ticks))
+        a.set_xticklabels(["in"] + ["%d" % t for t in ticks])
+        panel(a, "abc"[i], TITLE[name] % len(rows))
+        grid(a)
+        peaks[i] = float(top1.max())
         summary.append((name, rows, entry, top1, over))
 
-    axes[0].set_ylabel("$|x|$ in the residual stream", labelpad=2)
-    # Open a clear strip at the bottom for the per-panel verdict, so it never
-    # sits on top of a curve. Shared y, so one call settles all three.
-    floor = min(w["median"] for rows in doc["stacks"].values() for w in rows)
-    axes[0].set_ylim(bottom=floor * 0.12)
-    for ax in axes:
-        ticks = [t for t in ax.get_xticks() if -0.5 <= t < ax.get_xlim()[1]]
-        ax.set_xticks([-1.4] + ticks)
-        ax.set_xticklabels(["in"] + ["%d" % t for t in ticks], fontsize=6)
-
-    # One legend under all three panels: nothing to collide with the curves.
-    h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, loc="outside lower center", ncol=3, fontsize=5.8,
-               handlelength=1.6, handletextpad=0.4, columnspacing=1.4,
-               labelspacing=0.3, borderaxespad=0.0, frameon=False)
-
-    for ext in ("pdf", "png"):
-        p = os.path.join(args.out, "fig_activations.%s" % ext)
-        fig.savefig(p)
-        print("wrote %s  (%.0f kB)" % (p, os.path.getsize(p) / 1024))
-    plt.close(fig)
-    report(summary, lim)
+    ax[0].set_ylabel("$|x|$ in the residual stream")
+    if peaks:
+        ax[0].set_ylim(top=max(peaks.values()) * 3.5)      # room for the corner notes
+    if peaks:                       # legend goes wherever there is most headroom
+        ax[min(peaks, key=peaks.get)].legend(
+            fontsize=5.5, handlelength=0.9, handletextpad=0.35, loc="upper right",
+            labelspacing=0.28, borderaxespad=0.2)
+    save(fig, "fig_activations", args.out)
+    report(summary, lim, steps)
 
 
-def report(summary, lim):
-    print("\n%-15s %10s %6s %10s   %s" % ("stack", "peak |x|", "layer", "median", "verdict"))
-    print("-" * 76)
+def _fmt(v):
+    return format(int(round(v)), ",d").replace(",", "\u2009") if v >= 100 else "%.1f" % v
+
+
+def report(summary, lim, steps):
+    """The audit trail, in the same shape vision_study.py prints."""
+    print("\nwhat the capture recorded")
+    print("  %-15s %10s %6s %10s   %s"
+          % ("stack", "peak |x|", "layer", "median", "verdict"))
     for name, rows, entry, top1, over in summary:
         i = int(np.argmax(top1))
-        print("%-15s %10.1f %6d %10.3f   %s"
+        print("  %-15s %10.1f %6d %10.3f   %s"
               % (name, top1[i], i, rows[i]["median"],
-                 "%d/%d layers over %.0f" % (len(over), len(rows), lim) if over.size
-                 else "stays under %.0f" % lim))
+                 "%d of %d layers over %.0f" % (len(over), len(rows), lim)
+                 if over.size else "stays under %.0f" % lim))
     for name, rows, entry, top1, over in summary:
         print("\n%s" % name)
         if entry:
-            print("  entering layer 0    max %.1f, median %.3f" % (entry["top"][0], entry["median"]))
+            print("  entering layer 0   max %.1f, median %.3f"
+                  % (entry["top"][0], entry["median"]))
         if over.size:
             f = rows[over[0]]
-            print("  first crossing      layer %d, |x| = %.1f in channel %d of %d"
+            print("  first crossing     layer %d, |x| = %.1f in channel %d of %d"
                   % (over[0], f["top"][0], f["chan"][0], f["width"]))
-            print("  at that layer       %.4f%% of values and %.2f%% of tokens are over"
+            print("  at that layer      %.4f%% of values and %.2f%% of tokens are over"
                   % (100 * f["frac_over"], 100 * f["rows_over"]))
         chans = [w["chan"][0] for w in rows]
         common = max(set(chans), key=chans.count)
-        print("  top channel         %d holds the largest value in %d of %d layers"
+        print("  top channel        %d holds the largest value in %d of %d layers"
               % (common, chans.count(common), len(chans)))
         seen = sorted({c for w in rows for c in w["chan"]})
-        print("  top-3 ever land in  %d distinct channels of %d: %s"
+        print("  top-3 ever land in %d distinct channels of %d: %s"
               % (len(seen), rows[0]["width"],
                  ", ".join(str(c) for c in seen[:8]) + (" ..." if len(seen) > 8 else "")))
-    print("\nA handful of channels carrying every large value is the per-channel case:")
-    print("one scale per column keeps them, one scale per tensor spends its whole")
-    print("range on them. It is also why the fp16 RMSNorm fix works -- rescaling by")
-    print("the row max moves those columns back under 256 without touching the ratio.")
+    print("\n  expert folded to the worst of %d flow steps; 'language model' is the"
+          % steps)
+    print("  weight set prefill and decode share, so it covers both.")
+    print("\n  A handful of channels carrying every large value is the per-channel")
+    print("  case: one scale per column keeps them, one scale per tensor spends its")
+    print("  whole range on them. It is also why the fp16 RMSNorm fix works --")
+    print("  rescaling by the row max moves those columns back under %.0f without" % lim)
+    print("  touching the ratio the norm actually depends on.")
 
 
 def main():
